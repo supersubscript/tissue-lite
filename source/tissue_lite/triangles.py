@@ -11,8 +11,7 @@ import numba
 import numpy as np
 
 from tissue_lite.arrays import FloatArray, IntArray
-from tissue_lite.tissue import CentreTriangulation, Tissue
-from tissue_lite.topology import Topology
+from tissue_lite.tissue import Tissue
 
 type Vector = tuple[float, float, float]
 type Matrix2 = tuple[tuple[float, float], tuple[float, float]]
@@ -20,24 +19,21 @@ type ShapeVectors = tuple[tuple[float, float], tuple[float, float], tuple[float,
 
 
 class TriangleMesh(NamedTuple):
-    """Triangle t of cell c (`offsets[c] <= t < offsets[c + 1]`) has vertices v2[t]
-    and v3[t] (the cell's vertices k and k + 1) and wall[t]; its spoke rest lengths
-    are `spokes[spoke_start[t]]` (centre-v2) and `spokes[spoke_end[t]]` (centre-v3)."""
+    """Index arrays and rest lengths of the centre triangles.
+
+    Triangle t of cell c (`offsets[c] <= t < offsets[c + 1]`) has vertices v2[t]
+    and v3[t] (the cell's vertices k and k + 1) and wall[t]. `spokes`,
+    `wall_lengths` and `wall_extensions` are the tissue's own arrays, so growth
+    updates are seen at once.
+    """
 
     offsets: IntArray
     v2: IntArray
     v3: IntArray
     wall: IntArray
-    spoke_start: IntArray
-    spoke_end: IntArray
-
-
-class RestLengths(NamedTuple):
-    """Rest lengths referenced from the tissue, so growth updates are seen at once."""
-
-    spokes: FloatArray
-    wall_lengths: FloatArray
-    wall_extensions: FloatArray  # empty with single rest lengths
+    spokes: FloatArray  # (T, 2)
+    wall_lengths: FloatArray  # (W,)
+    wall_extensions: FloatArray  # (T,)
 
 
 class TriangleGeometry(NamedTuple):
@@ -57,29 +53,23 @@ class TriangleGeometry(NamedTuple):
     normal: Vector
 
 
-def build_triangle_mesh(topology: Topology, double_rest_lengths: bool) -> TriangleMesh:
-    """Builds the triangle index arrays for single or double rest lengths."""
-    flat = np.arange(len(topology.cell_vertices))
-    nxt = topology.triangle_next
+def build_triangle_mesh(tissue: Tissue) -> TriangleMesh:
+    """Builds the triangle index arrays over the tissue's centre triangulation.
+
+    Raises:
+        ValueError: If the tissue has no centre triangulation.
+    """
+    if tissue.triangulation is None:
+        raise ValueError("Tissue has no centre triangulation")
+    topology = tissue.topology
     return TriangleMesh(
         offsets=topology.offsets,
         v2=topology.cell_vertices,
-        v3=topology.cell_vertices[nxt],
+        v3=topology.cell_vertices[topology.triangle_next],
         wall=topology.cell_walls,
-        spoke_start=2 * flat + 1 if double_rest_lengths else flat,
-        spoke_end=2 * nxt if double_rest_lengths else nxt,
-    )
-
-
-def build_rest_lengths(
-    tissue: Tissue, triangulation: CentreTriangulation
-) -> RestLengths:
-    """Bundles the tissue's rest-length arrays without copying them."""
-    extensions = triangulation.wall_extensions
-    return RestLengths(
-        spokes=triangulation.spokes,
+        spokes=tissue.triangulation.spokes,
         wall_lengths=tissue.wall_lengths,
-        wall_extensions=np.empty(0) if extensions is None else extensions,
+        wall_extensions=tissue.triangulation.wall_extensions,
     )
 
 
@@ -153,14 +143,10 @@ def compute_triangle_geometry(
 
 
 @numba.njit(cache=True)
-def get_rest_lengths(
-    mesh: TriangleMesh, rest: RestLengths, t: int, double_rest_lengths: bool
-) -> Vector:
+def get_rest_lengths(mesh: TriangleMesh, t: int) -> Vector:
     """Rest lengths of triangle t in the order of `TriangleGeometry.lengths`."""
-    wall = rest.wall_lengths[mesh.wall[t]]
-    if double_rest_lengths:
-        wall = wall + rest.wall_extensions[t]
-    return rest.spokes[mesh.spoke_start[t]], wall, rest.spokes[mesh.spoke_end[t]]
+    wall = mesh.wall_lengths[mesh.wall[t]] + mesh.wall_extensions[t]
+    return mesh.spokes[t, 0], wall, mesh.spokes[t, 1]
 
 
 @numba.njit(cache=True)

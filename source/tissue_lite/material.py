@@ -41,7 +41,6 @@ class Material(NamedTuple):
     young_fibre: float
     poisson_longitudinal: float
     poisson_transverse: float
-    double_rest_lengths: bool
     soften: bool
     k_hill: float
     n_hill: float
@@ -75,7 +74,6 @@ class TRBSMembrane:
             young_fibre=self.young_fibre,
             poisson_longitudinal=self.poisson_longitudinal,
             poisson_transverse=self.poisson_transverse,
-            double_rest_lengths=self.double_rest_lengths,
             soften=s is not None,
             k_hill=0.0 if s is None else s.k_hill,
             n_hill=0.0 if s is None else s.n_hill,

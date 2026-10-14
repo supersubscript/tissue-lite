@@ -40,12 +40,7 @@ from tissue_lite.tissue import (
     Tissue,
     initiate_triangulation,
 )
-from tissue_lite.triangles import (
-    RestLengths,
-    TriangleMesh,
-    build_rest_lengths,
-    build_triangle_mesh,
-)
+from tissue_lite.triangles import TriangleMesh, build_triangle_mesh
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +139,7 @@ class ModelState:
     rand_state: IntArray = field(default_factory=make_rand_state)
     pressure_factor: float = 0.0
     rest_positions: FloatArray = field(init=False)
-    mesh: TriangleMesh = field(init=False)
-    rest: RestLengths = field(init=False, repr=False)
+    mesh: TriangleMesh = field(init=False, repr=False)
     fixed: BoolArray = field(init=False, repr=False)
     _material: Material = field(init=False, repr=False)
     _fibres: FibreKernel | None = field(init=False, repr=False)
@@ -157,14 +151,11 @@ class ModelState:
         membrane = model.membrane
         if model.fibres is not None:
             feedback.initiate_fibres(model.fibres, membrane, tissue.cells)
-        tissue.triangulation = initiate_triangulation(
-            tissue, membrane.double_rest_lengths
-        )
+        tissue.triangulation = initiate_triangulation(tissue)
         if model.microtubules is not None:
             feedback.initiate_microtubules(tissue.cells)
         self.rest_positions = tissue.vertices.copy()
-        self.mesh = build_triangle_mesh(tissue.topology, membrane.double_rest_lengths)
-        self.rest = build_rest_lengths(tissue, tissue.triangulation)
+        self.mesh = build_triangle_mesh(tissue)
         self.fixed = np.zeros(tissue.vertices.shape, dtype=bool)
         edge = np.flatnonzero(tissue.topology.boundary)
         axes = np.array(model.boundary.fixed_axes, dtype=np.int64)
@@ -199,7 +190,6 @@ class ModelState:
         centre_forces = np.zeros_like(centres)
         forces.compute_trbs_forces(
             self.mesh,
-            self.rest,
             centres,
             vertices,
             cells,
@@ -234,7 +224,6 @@ class ModelState:
             feedback.update_fibres(cells, h, self._fibres)
         stress.update_cell_stress(
             self.mesh,
-            self.rest,
             centres,
             tissue.vertices,
             cells,
@@ -250,7 +239,6 @@ class ModelState:
         if model.growth is not None:
             growth.update_growth(
                 self.mesh,
-                self.rest,
                 centres,
                 tissue.vertices,
                 cells,

@@ -16,7 +16,6 @@ from tissue_lite.arrays import FloatArray
 from tissue_lite.material import pull_back_direction
 from tissue_lite.tissue import CellState
 from tissue_lite.triangles import (
-    RestLengths,
     TriangleGeometry,
     TriangleMesh,
     Vector,
@@ -38,7 +37,6 @@ class StrainGrowth:
 @numba.njit(cache=True)
 def update_growth(
     mesh: TriangleMesh,
-    rest: RestLengths,
     centres: FloatArray,
     vertices: FloatArray,
     cells: CellState,
@@ -64,7 +62,7 @@ def update_growth(
         )
         for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
             tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
-            rest_lengths = get_rest_lengths(mesh, rest, t, True)
+            rest_lengths = get_rest_lengths(mesh, t)
             rest_plane = _compute_plane_by_angle(rest_lengths)
             direction = _compute_growth_direction(
                 tri, _compute_plane_by_angle(tri.lengths), rest_plane, growth_axis
@@ -75,9 +73,9 @@ def update_growth(
             )
             cells.growth_count[c] += count
             spoke_a, wall, spoke_b = _compute_edge_lengths(components)
-            rest.wall_extensions[t] = wall - rest.wall_lengths[mesh.wall[t]]
-            rest.spokes[mesh.spoke_start[t]] = spoke_a
-            rest.spokes[mesh.spoke_end[t]] = spoke_b
+            mesh.wall_extensions[t] = wall - mesh.wall_lengths[mesh.wall[t]]
+            mesh.spokes[t, 0] = spoke_a
+            mesh.spokes[t, 1] = spoke_b
 
 
 type EdgeComponents = tuple[

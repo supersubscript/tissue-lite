@@ -25,7 +25,6 @@ from tissue_lite.material import (
 from tissue_lite.tissue import CellState
 from tissue_lite.triangles import (
     Matrix2,
-    RestLengths,
     TriangleGeometry,
     TriangleMesh,
     Vector,
@@ -52,7 +51,6 @@ _ZERO3: Matrix3 = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 @numba.njit(cache=True)
 def update_cell_stress(
     mesh: TriangleMesh,
-    rest: RestLengths,
     centres: FloatArray,
     vertices: FloatArray,
     cells: CellState,
@@ -88,7 +86,7 @@ def update_cell_stress(
         for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
             # Geometry, deformation and fibre direction of the triangle.
             tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
-            rest_lengths = get_rest_lengths(mesh, rest, t, material.double_rest_lengths)
+            rest_lengths = get_rest_lengths(mesh, t)
             rest_area = compute_triangle_area(rest_lengths)
             area = compute_triangle_area(tri.lengths)
             shape = compute_shape_vectors(compute_plane_coordinates(rest_lengths))

@@ -31,10 +31,10 @@ def test_boundary_rejects_axes() -> None:
 @pytest.mark.parametrize(
     ("softening", "expected"),
     [
-        (None, Material(1.0, 2.0, 0.2, 0.3, True, False, 0.0, 0.0)),
+        (None, Material(1.0, 2.0, 0.2, 0.3, False, 0.0, 0.0)),
         (
             ConcentrationSoftening(2.0, 3.0),
-            Material(1.0, 2.0, 0.2, 0.3, True, True, 2.0, 3.0),
+            Material(1.0, 2.0, 0.2, 0.3, True, 2.0, 3.0),
         ),
     ],
 )

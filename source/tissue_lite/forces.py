@@ -23,7 +23,6 @@ from tissue_lite.material import (
 from tissue_lite.tissue import CellState
 from tissue_lite.triangles import (
     Matrix2,
-    RestLengths,
     ShapeVectors,
     TriangleGeometry,
     TriangleMesh,
@@ -44,7 +43,6 @@ _SLIVER = 0.0001
 @numba.njit(cache=True)
 def compute_trbs_forces(
     mesh: TriangleMesh,
-    rest: RestLengths,
     centres: FloatArray,
     vertices: FloatArray,
     cells: CellState,
@@ -69,7 +67,7 @@ def compute_trbs_forces(
         for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
             # Geometry and stiffness of the rest triangle.
             tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
-            rest_lengths = get_rest_lengths(mesh, rest, t, material.double_rest_lengths)
+            rest_lengths = get_rest_lengths(mesh, t)
             rest_area = compute_triangle_area(rest_lengths)
             cosines = _compute_rest_cosines(rest_lengths)
             tensile, angular = _compute_spring_stiffness(

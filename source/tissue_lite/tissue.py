@@ -89,16 +89,16 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
 class CentreTriangulation:
     """Tissue's centre triangulation: one centre per cell, spokes to its vertices.
 
-    With single rest lengths, `spokes[offsets[c] + k]` is the rest length of spoke k
-    (centre to vertex k). With double rest lengths spoke k has two copies, as Tissue
-    stores them: `spokes[2 * (offsets[c] + k)]`, used by triangle k - 1, and
-    `spokes[2 * (offsets[c] + k) + 1]`, used by triangle k. `wall_extensions` is each
-    cell's growth added to the rest length of its wall k.
+    `spokes[t]` holds the rest lengths of triangle t's two spokes (centre to vertex
+    k, centre to vertex k + 1). Tissue stores one spoke per vertex unless the
+    membrane uses double rest lengths; here every triangle owns both, and without
+    growth the shared values stay equal. `wall_extensions[t]` is each triangle's
+    growth added to its wall's rest length (0 without growth).
     """
 
     centres: FloatArray  # (C, 3)
-    spokes: FloatArray  # (sum N,) or (2 sum N,)
-    wall_extensions: FloatArray | None = None  # (sum N,), double rest lengths only
+    spokes: FloatArray  # (T, 2)
+    wall_extensions: FloatArray  # (T,)
 
 
 @dataclass
@@ -146,9 +146,7 @@ def compute_cell_centroids(tissue: Tissue) -> FloatArray:
     return np.column_stack(sums) / total[:, None]
 
 
-def initiate_triangulation(
-    tissue: Tissue, double_rest_lengths: bool
-) -> CentreTriangulation:
+def initiate_triangulation(tissue: Tissue) -> CentreTriangulation:
     """Creates the centre triangulation from scratch, as Tissue does without one stored.
 
     Centres are the wall-length-weighted means of the wall midpoints; spoke rest
@@ -162,10 +160,8 @@ def initiate_triangulation(
         + spoke[:, 1] * spoke[:, 1]
         + spoke[:, 2] * spoke[:, 2]
     )
-    if not double_rest_lengths:
-        return CentreTriangulation(centres=centres, spokes=distances)
     return CentreTriangulation(
         centres=centres,
-        spokes=np.repeat(distances, 2),
+        spokes=np.column_stack([distances, distances[topo.triangle_next]]),
         wall_extensions=np.zeros(len(distances)),
     )
