@@ -49,6 +49,9 @@ class MeristemModel:
     Without `track_velocity` the cell velocity keeps its initial value, as in
     Tissue models lacking `Calculate::VertexVelocity`, so the velocity gates see a
     constant (KNOWN_ISSUES F3).
+
+    Raises:
+        ValueError: If growth gates on velocity without `track_velocity`.
     """
 
     membrane: TRBSMembrane
@@ -58,6 +61,11 @@ class MeristemModel:
     microtubules: MicrotubuleAlignment | None = None
     growth: StrainGrowth | None = None
     track_velocity: bool = True
+
+    def __post_init__(self) -> None:
+        gated = self.growth is not None and self.growth.velocity_threshold is not None
+        if gated and not self.track_velocity:
+            raise ValueError("A growth velocity_threshold needs track_velocity")
 
     @classmethod
     def from_toml(cls, path: Path) -> MeristemModel:
