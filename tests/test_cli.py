@@ -62,3 +62,18 @@ def test_toml_softening_needs_concentration_slot(tmp_path: Path) -> None:
 def test_missing_file_fails() -> None:
     result = CliRunner().invoke(main, ["missing.model", "a.init", "b.rk5"])
     assert result.exit_code != 0
+
+
+def test_solver_option_runs_the_quasi_static_solver(tmp_path: Path) -> None:
+    case = CASES_DIR / "sweep_rejections"
+    out = tmp_path / "final.init"
+    result = CliRunner().invoke(
+        main, [*_args(case), "-init_output", str(out), "--solver", "quasi-static"]
+    )
+    assert result.exit_code == 0, result.output
+    layout = read_case_model(case).layout
+    final = read_init(out, layout)
+    reference = read_init(case / "final.init", layout)
+    assert (
+        abs(final.vertices - reference.vertices).max() > 1.0
+    )  # equilibrium, not t = 0.2

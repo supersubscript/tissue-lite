@@ -18,6 +18,7 @@ It reproduces Tissue e74e457 **bit for bit** on every regression case and on the
 | Stress and strain outputs | TRBS `update` | `stress.update_cell_stress` |
 | Diagnostics: velocity, angles, volume change | `Calculate::*`, `TemplateVolumeChange` | `diagnostics` |
 | Adaptive Cash–Karp RK5 | `RK5Adaptive` | `solvers.cash_karp.CashKarp`, `solvers.simulate.simulate` |
+| — (replacement solvers, see below) | — | `solvers.quasi_static.QuasiStatic`, `solvers.implicit.Implicit` |
 | `.init` IO, VTU/PVD output (print flag 2) | `Tissue::readInit`, `VTUostream` | `legacy.init_file`, `output.VtuWriter` |
 
 Everything else in Tissue (other reactions, division, other solvers and output formats) is dropped. Legacy `.model` files using anything outside this subset are rejected.
@@ -61,6 +62,16 @@ cells = result.final.cells
 
 Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.model_file.read_model_file`). Per-cell state is named (`tissue.CellState`); Tissue's slot numbering lives only in `legacy.slots.SlotLayout`, used by the `.init` reader and writer and by `output.VtuWriter` (pass one as `writer=` to `simulate` for VTU frames), so files and readers such as `flower.output` work unchanged.
 
+## Solvers
+
+| Solver | Semantics | Select |
+|---|---|---|
+| `solvers.cash_karp.CashKarp` | Tissue's `RK5Adaptive`, bit-exact: feedback after every accepted step, step capped at `max_step` (5e-3 in the project's files) | CLI default, settings from the `.rk5` file; `solver=CashKarp()` |
+| `solvers.quasi_static.QuasiStatic` | One feedback step of `step`, then the mechanical equilibrium of the current feedback state: pseudo-transient Newton on the forces with a coloured finite-difference Jacobian; a rigid drift a partly fixed boundary allows is discarded | `simulate` default; `--solver quasi-static [--step 1.0]` |
+| `solvers.implicit.Implicit` | One feedback step, then Radau (or BDF) over the window, time-accurate without the stiffness-limited step | `--solver implicit`; `Implicit(method="BDF")` |
+
+The replacement solvers change the feedback semantics (KNOWN_ISSUES N1–N6); the regression data covers Cash–Karp only.
+
 ## Modules
 
 | Module | Owns |
@@ -69,7 +80,7 @@ Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or rea
 | `material`, `forces`, `stress` | Membrane, pressure and boundary parameters; force kernels; stress and strain update |
 | `feedback`, `growth`, `diagnostics` | Fibre and MT feedback, wall growth, velocity/angle/volume diagnostics |
 | `model` | `MeristemModel` and `ModelState` (positions, centre triangles, reaction state), which evaluates the reactions in Tissue's order |
-| `solvers` | `Stepper` protocol, `CashKarp`, `simulate` |
+| `solvers` | `Stepper` protocol, `CashKarp`, `QuasiStatic`, `Implicit`, the Jacobian `sparsity`, `simulate` |
 | `legacy` | Slot numbering, `.init`, `.model` and solver files |
 | `output`, `cli`, `rand` | VTU/PVD writer, command line, glibc `rand()` |
 

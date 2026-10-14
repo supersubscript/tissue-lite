@@ -73,6 +73,19 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 | L3 | `StaticDirection` / `ParallellDirection` are no-ops without division. | Ignored by the reader. |
 | L4 | Print flags other than 2 (VTU) are not supported; `models/*` use flag 6 (PLY). | The CLI warns and writes VTU. |
 
+## Replacement solvers (`solvers/quasi_static.py`, `solvers/implicit.py`)
+
+Both apply one feedback update of length `step` (default 1.0) and then a mechanical solve: `QuasiStatic` moves the positions to where the free forces vanish (pseudo-transient Newton, finite-difference Jacobian coloured per `solvers/sparsity.py`), `Implicit` integrates the overdamped dynamics over the window with scipy's Radau or BDF. They differ from Tissue's Cash–Karp as follows; the regression data exercises none of it.
+
+| # | Difference | Effect |
+|---|---|---|
+| N1 | Feedback (fibres, microtubules, growth, pressure ramp) advances once per `step`, before the mechanics of the step, instead of once per Cash–Karp step (≤ 5e-3) after it. | Explicit Euler on the feedback with a larger step: `rate * step` must stay well below 1 and growth per step scales with `step`. At `step = 1` the end states of `aniso` and `aniso_growth` differ from Cash–Karp's by 10 % and 50 % of the movement; shrink `step` to converge. The fixed point is unchanged. |
+| N2 | A boundary that leaves rigid motions free (`fixed_axes` shorter than three) lets the pressure on its non-planar edge push the tissue rigidly: translation along each free axis and rotation about a single fixed one. Cash–Karp and `Implicit` integrate the drift (sweep: 1e-3 per time unit, `auxin_softening`: 0.9 per time unit); `QuasiStatic` discards it and holds the tissue in place. | Positions differ by a rigid motion; shapes and stresses do not, except that the fibres are fixed in space, so a rotation drift re-orients the tissue against them. |
+| N3 | Trial evaluations are pure functions of the positions (`ModelState.compute_trial_forces`): the random fibre fallback (T1) restarts from the current seed on every call and the diagnostics go to a scratch copy. | A cell whose microtubule axis vanishes gets the same pseudo-random fibre direction in every evaluation of a step; the real stream advances only in the frame loop's own evaluation. |
+| N4 | `QuasiStatic` skips the mechanical transient: every printed frame is an equilibrium of the current feedback state, and the velocity diagnostic (var 22) is the residual force, i.e. the drift of N2 or 0. | Velocity gates (300) are always open, as they are in practice in Tissue (F3). Shapes differ from Tissue's where its feedback acted during the transient (issue #2). The inflation from a flat rest state is a snap-through that costs the first step 60–200 Newton iterations; later steps take 1–5. |
+| N5 | The Jacobian pattern ignores Tissue's sliver branch (T3). | More Newton iterations on a sliver, never a wrong equilibrium: the residual is exact. |
+| N6 | S1, S2 and S4 do not apply; S6 (t_end printed twice for n_frames > 2) and S7 still do, since the frame loop is shared. | Runs to t_end; the S6 sliver step to t_end costs one residual evaluation once converged. |
+
 ## tissue-lite limitations (not Tissue quirks)
 
 | # | Issue |

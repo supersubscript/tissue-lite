@@ -2,7 +2,9 @@
 
 `tissue-lite MODEL INIT SOLVER [-init_output FILE] [-vtk_output DIR]` takes the same
 arguments as Tissue, so `TISSUE_BIN=tissue-lite` works with existing run scripts.
-MODEL is a legacy `.model` file or a TOML model; SOLVER is an RK5Adaptive file.
+MODEL is a legacy `.model` file or a TOML model; SOLVER is an RK5Adaptive file,
+followed by default (`--solver cash-karp`); the replacement solvers take only its
+time span and frame count.
 """
 
 import logging
@@ -16,7 +18,10 @@ from tissue_lite.legacy.slots import SlotLayout
 from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.model import MeristemModel
 from tissue_lite.output import VtuWriter
+from tissue_lite.solvers.implicit import Implicit
+from tissue_lite.solvers.quasi_static import QuasiStatic
 from tissue_lite.solvers.simulate import simulate
+from tissue_lite.solvers.stepper import Stepper
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,22 @@ _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
     type=int,
     help="TOML models only: cell-variable column holding the softening concentration.",
 )
+@click.option(
+    "--solver",
+    "solver_name",
+    type=click.Choice(["cash-karp", "quasi-static", "implicit"]),
+    default="cash-karp",
+    show_default=True,
+    help="cash-karp follows SOLVER_FILE as Tissue does; quasi-static and implicit "
+    "(Radau) take feedback steps of --step instead (KNOWN_ISSUES N1–N6).",
+)
+@click.option(
+    "--step",
+    type=float,
+    default=1.0,
+    show_default=True,
+    help="Feedback step of the quasi-static and implicit solvers.",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Logs debug messages.")
 def main(
     model_file: Path,
@@ -63,6 +84,8 @@ def main(
     vtk_output: Path,
     second_axes: bool,
     concentration_slot: int | None,
+    solver_name: str,
+    step: float,
     verbose: bool,
 ) -> None:
     """Simulates MODEL_FILE from INIT_FILE with the settings in SOLVER_FILE."""
@@ -80,12 +103,17 @@ def main(
         legacy = read_model_file(model_file)
         model, layout = legacy.model, legacy.layout
     settings = read_solver_file(solver_file)
+    solvers: dict[str, Stepper] = {
+        "cash-karp": settings.solver,
+        "quasi-static": QuasiStatic(step=step),
+        "implicit": Implicit(step=step),
+    }
     result = simulate(
         model,
         read_init(init_file, layout),
         t_end=settings.t_end,
         n_frames=settings.n_frames,
-        solver=settings.solver,
+        solver=solvers[solver_name],
         t_start=settings.t_start,
         writer=VtuWriter(vtk_output, settings.n_frames, layout),
     )

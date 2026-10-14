@@ -13,7 +13,7 @@ import numpy as np
 from tissue_lite.arrays import FloatArray
 from tissue_lite.model import MeristemModel, ModelState
 from tissue_lite.output import VtuWriter
-from tissue_lite.solvers.cash_karp import CashKarp
+from tissue_lite.solvers.quasi_static import QuasiStatic
 from tissue_lite.solvers.stepper import Stepper
 from tissue_lite.tissue import Tissue
 
@@ -52,7 +52,7 @@ def simulate(
     tissue: Tissue,
     t_end: float,
     n_frames: int = 100,
-    solver: Stepper = CashKarp(),
+    solver: Stepper = QuasiStatic(),
     t_start: float = 0.0,
     writer: VtuWriter | None = None,
 ) -> SimulationResult:
@@ -135,10 +135,10 @@ def prerun_and_simulate(
     tissue: Tissue,
     t_end: float,
     n_frames: int = 100,
-    solver: Stepper = CashKarp(),
+    solver: Stepper = QuasiStatic(),
     prerun_t_end: float = 1.0,
     prerun_frames: int = 2,
-    prerun_solver: Stepper = CashKarp(),
+    prerun_solver: Stepper = QuasiStatic(),
     writer: VtuWriter | None = None,
 ) -> tuple[SimulationResult, SimulationResult]:
     """Reproduces flower-experiments' `prerunAndSim.sh`: prerun, then main run.
