@@ -227,8 +227,17 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
     if mf == 10:
         if len(level0) != 12:
             raise ValueError("MF=10 needs a 12th level-0 index (the concentration)")
-        # Tissue reads K and n from p9 and p10, not from p11 and p12 (KNOWN_ISSUES).
+        # Tissue reads K and n from p9 and p10, not from p11 and p12 (KNOWN_ISSUES C1).
         softening = ConcentrationSoftening(k_hill=p[9], n_hill=p[10])
+        if (p[11], p[12]) != (p[9], p[10]):
+            logger.warning(
+                "MF=10 uses K = p9 = %g and n = p10 = %g as Tissue does; p11 = %g and "
+                "p12 = %g are ignored (KNOWN_ISSUES C1)",
+                p[9],
+                p[10],
+                p[11],
+                p[12],
+            )
         concentration_slot = level0[11]
         level0 = level0[:11]
     if level0 != _TRBS_LEVEL0:
