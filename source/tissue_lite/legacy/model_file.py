@@ -79,7 +79,7 @@ _STORAGE: dict[tuple[tuple[int, ...], tuple[int, ...]], bool] = {
 
 @dataclass(frozen=True)
 class Reaction:
-    """One reaction block of a model file."""
+    """One reaction block of a model file: parameters and one index list per level."""
 
     name: str
     parameters: list[float]
@@ -100,10 +100,14 @@ def _split_tokens(text: str) -> list[str]:
 
 
 def parse_reactions(text: str) -> list[Reaction]:
-    """Parses the reaction blocks of a model file.
+    """Parses the reaction blocks of a model file, dropping its direction rules.
+
+    `StaticDirection` and `ParallellDirection` are no-ops without division
+    (KNOWN_ISSUES L3).
 
     Raises:
-        ValueError: If the file has compartment changes or unknown directions.
+        ValueError: If the file is truncated, has compartment changes or other
+            directions.
     """
     tokens = _split_tokens(text)
     pos = 0
@@ -134,16 +138,22 @@ def parse_reactions(text: str) -> list[Reaction]:
 
 
 def read_model_file(path: Path) -> LegacyModel:
-    """Reads a Tissue model file.
-
-    Raises:
-        ValueError: If it uses anything outside the retained subset.
-    """
+    """Reads a Tissue model file; raises ValueError outside the retained subset."""
     return build_model(parse_reactions(path.read_text()))
 
 
 def build_model(reactions: list[Reaction]) -> LegacyModel:
-    """Maps retained Tissue reactions onto a `MeristemModel` and its slot layout."""
+    """Maps retained Tissue reactions onto a `MeristemModel` and its slot layout.
+
+    Kept as in Tissue: MF=10 reads K and n from p9 and p10 (KNOWN_ISSUES C1), p9 = 1 is
+    rejected (C2) and p10 == 1 selects double rest lengths (T11); FiberModel keeps its
+    own moduli, with a warning (F2); without `Calculate::VertexVelocity`,
+    `track_velocity` is off (F3).
+
+    Raises:
+        ValueError: If a reaction, its order, its parameters or its cell-variable slots
+            fall outside the supported subset (L1).
+    """
     _validate_order([r.name for r in reactions])
     by_name = {r.name: r for r in reactions}
     trbs = by_name["VertexFromTRBScenterTriangulationMT"]

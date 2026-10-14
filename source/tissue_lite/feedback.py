@@ -1,7 +1,8 @@
 """Mechanical feedback on wall material: fibre stiffness and microtubule alignment.
 
 Ports `FiberModel::General` and `UpdateMTDirectionEquilibrium` from Tissue e74e457.
-Both are explicit updates applied once per accepted solver step.
+Both are explicit Euler updates applied once per accepted solver step, outside its
+error control and with the trial step length (KNOWN_ISSUES S4, S2).
 """
 
 from dataclasses import dataclass
@@ -21,7 +22,10 @@ COUPLING_CODES: dict[Coupling, int] = {"linear": 0, "hill": 1, "hill_direct": 2}
 
 
 class FibreParameters(NamedTuple):
-    """`FibreStiffness` as the kernel takes it."""
+    """`FibreStiffness` as the kernel takes it.
+
+    `coupling` is the `COUPLING_CODES` value of the coupling name.
+    """
 
     rate: float
     coupling: int
@@ -49,9 +53,11 @@ class FibreStiffness:
     """Relaxes each cell's longitudinal modulus towards a stress-anisotropy target.
 
     Target: `Ym + 0.5 (1 + f(a)) Yf`, with `f(a) = a` (linear) or the Hill function
-    `a^n / ((1 - a)^n k^n + a^n)`. "hill_direct" sets `0.5 (1 + f(a)) Yf` at once,
-    without Ym or the velocity gate, as Tissue's flag 2 does. Ym and Yf default to
-    the membrane's; Tissue lets them differ (see KNOWN_ISSUES).
+    `a^n / ((1 - a)^n k^n + a^n)` of the stress anisotropy `a`. "linear" and "hill"
+    update only cells slower than `velocity_threshold` whose modulus is below `Ym + Yf`.
+    "hill_direct" sets `0.5 (1 + f(a)) Yf` at once, without Ym or the velocity gate, as
+    Tissue's flag 2 does (KNOWN_ISSUES F1). Ym and Yf default to the membrane's; Tissue
+    lets them differ (F2). A `rate` of 0 disables the update but not `initialise` (F4).
     """
 
     rate: float
@@ -91,6 +97,9 @@ class MicrotubuleAlignment:
     Without thresholds every cell updates. With `velocity_threshold`, only cells whose
     mean vertex speed is below it update; `stress_difference_threshold` (requires the
     velocity gate) also requires `|(s_max - s_vm) / s_max|` to exceed it.
+
+    Raises:
+        ValueError: If `stress_difference_threshold` lacks a `velocity_threshold`.
     """
 
     rate: float
@@ -123,7 +132,12 @@ def _hill_fraction(a: float | FloatArray, k: float, n: float) -> float | FloatAr
 def initiate_fibres(
     fibres: FibreStiffness, membrane: TRBSMembrane, cells: CellState
 ) -> None:
-    """Sets the initial longitudinal modulus from the stored stress anisotropy."""
+    """Sets the initial longitudinal modulus from the stored stress anisotropy.
+
+    Writes `cells.young_longitudinal` unless `fibres.initialise` is "none", even when
+    the rate is 0 (KNOWN_ISSUES F4). "isotropic" also zeroes `cells.stress_anisotropy`.
+    "hill_direct" includes Ym here, unlike the update (F1).
+    """
     young_matrix, young_fibre = fibres.get_moduli(membrane)
     if fibres.initialise == "isotropic":
         cells.stress_anisotropy[:] = 0
@@ -141,7 +155,12 @@ def initiate_fibres(
 
 @numba.njit(cache=True)
 def update_fibres(cells: CellState, h: float, fibres: FibreParameters) -> None:
-    """Applies one explicit fibre-stiffness update of length h."""
+    """Applies one explicit Euler fibre-stiffness update of length h.
+
+    Reads `cells.stress_anisotropy` and `velocity`, writes `cells.young_longitudinal`.
+    `h` is the solver's trial step (KNOWN_ISSUES S2) and the velocity is that of the
+    previous accepted state (S5). Does nothing when the rate is 0.
+    """
     rate, coupling, k, n, velocity_threshold, young_matrix, young_fibre = fibres
     if rate == 0.0:
         return
@@ -172,7 +191,15 @@ def initiate_microtubules(cells: CellState) -> None:
 def update_microtubules(
     cells: CellState, h: float, microtubules: MicrotubuleParameters
 ) -> None:
-    """Applies one explicit microtubule update of length h."""
+    """Applies one explicit Euler microtubule update of length h.
+
+    Flips an axis that points against `cells.stress_direction`, moves it by
+    `rate * h * (target - axis)` and renormalises it in place. Cells failing a gate are
+    skipped; `h` and the velocity are as in `update_fibres` (KNOWN_ISSUES S2, S5).
+
+    Raises:
+        ZeroDivisionError: If the stress-difference gate meets `stress_max == 0`.
+    """
     rate, gate_level, velocity_threshold, stress_difference_threshold = microtubules
     if rate == 0.0:
         return

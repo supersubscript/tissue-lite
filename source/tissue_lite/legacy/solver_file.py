@@ -22,10 +22,13 @@ class SolverFile:
 
 
 def read_solver_file(path: Path) -> SolverFile:
-    """Reads an RK5Adaptive solver file; other print flags still give VTU output.
+    """Reads `RK5Adaptive t_start t_end flag n_print h1 eps`, ignoring `#` comments.
+
+    `h1` becomes `CashKarp.max_step` and `eps` its tolerance. A print `flag` other than
+    2 (VTU) logs a warning and the output stays VTU (KNOWN_ISSUES L4).
 
     Raises:
-        ValueError: If it names another solver.
+        ValueError: If it names another solver or its six values are missing or invalid.
     """
     tokens = [
         tok

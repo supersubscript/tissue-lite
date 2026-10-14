@@ -24,7 +24,7 @@ class ConcentrationSoftening:
     """Hill repression of both moduli by `CellState.concentration` (Tissue's MF=10).
 
     Both moduli are scaled by `1 - c^n / (k^n + c^n)`, e.g. for auxin-driven wall
-    loosening.
+    loosening. Tissue reads K and n from p9 and p10 (KNOWN_ISSUES C1).
     """
 
     k_hill: float
@@ -32,7 +32,10 @@ class ConcentrationSoftening:
 
 
 class Material(NamedTuple):
-    """The membrane scalars as the Numba kernels take them."""
+    """The membrane scalars as the Numba kernels take them (`TRBSMembrane.to_kernel`).
+
+    `k_hill` and `n_hill` are 0 unless `soften`.
+    """
 
     young_matrix: float
     young_fibre: float
@@ -49,6 +52,11 @@ class TRBSMembrane:
 
     The longitudinal modulus is read from the cell state (set by `FibreStiffness`);
     the transverse one is `2 young_matrix + young_fibre - longitudinal`.
+    `double_rest_lengths` (Tissue's p10 == 1, KNOWN_ISSUES T11) is required by
+    `StrainGrowth`; every triangle owns both spoke rest lengths regardless.
+
+    Raises:
+        ValueError: If a Poisson ratio is outside [0, 0.5).
     """
 
     young_matrix: float
@@ -82,6 +90,10 @@ class Pressure:
     """Turgor pressure on each triangle, proportional to its area, ramped up linearly.
 
     The pressure factor starts at 0 and grows by `h / ramp_time` per accepted step.
+    Capped at 1, so a `ramp_time` of at most one step means no ramp (KNOWN_ISSUES P2).
+
+    Raises:
+        ValueError: If `ramp_time` is not positive.
     """
 
     pressure: float
@@ -94,7 +106,13 @@ class Pressure:
 
 @dataclass(frozen=True)
 class Boundary:
-    """Vertices on the tissue edge do not move along `fixed_axes`."""
+    """Vertices on the tissue edge do not move along `fixed_axes` (0, 1, 2 = x, y, z).
+
+    The edge is `Topology.boundary`; cell centres are never fixed.
+
+    Raises:
+        ValueError: If `fixed_axes` is not a subset of (0, 1, 2).
+    """
 
     fixed_axes: tuple[int, ...] = (0, 1, 2)
 
@@ -107,7 +125,11 @@ class Boundary:
 def compute_moduli(
     young_longitudinal: float, concentration: float, material: Material
 ) -> tuple[float, float]:
-    """Returns (young_L, young_T) of a cell, softened when the material says so."""
+    """Returns (young_L, young_T) of a cell, softened when the material says so.
+
+    young_T is `2 young_matrix + young_fibre - young_L`. When `material.soften`, the
+    Hill factor of `concentration` scales both (k = n = 0 gives 1/2, KNOWN_ISSUES C1).
+    """
     young_l = young_longitudinal
     young_t = 2 * material.young_matrix + material.young_fibre - young_l
     if material.soften:
@@ -131,7 +153,7 @@ class Lame(NamedTuple):
 
 @numba.njit(cache=True)
 def compute_lame_parameters(young_l: float, young_t: float, material: Material) -> Lame:
-    """Returns (λ, μ) of both moduli, each as Tissue forms them from E and ν."""
+    """Returns plane-stress λ = Eν / (1 - ν²), μ = E / (2 (1 + ν)) for both moduli."""
     nu_l = material.poisson_longitudinal
     nu_t = material.poisson_transverse
     return Lame(
@@ -157,9 +179,11 @@ def compute_fibre_direction(
     microtubule: Vector,
     rand_state: IntArray,
 ) -> tuple[float, float]:
-    """Unit microtubule axis in the rest plane; random when it vanishes (T1).
+    """Returns the unit microtubule axis in the rest plane, as a 2-tuple.
 
-    The random fallback consumes `rand_state` (KNOWN_ISSUES T1, T2).
+    `microtubule` is a global-frame vector. If its pulled-back length is below 1e-4
+    (without 1/det F, KNOWN_ISSUES T2) the axis is a random whole degree instead: one
+    draw from `rand_state`, advanced in place (T1).
     """
     a0, a1 = pull_back_direction(gradient, x_axis, y_axis, microtubule)
     measure = np.sqrt(a0 * a0 + a1 * a1)

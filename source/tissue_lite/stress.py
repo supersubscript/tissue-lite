@@ -59,10 +59,16 @@ def update_cell_stress(
 ) -> None:
     """Writes the area-weighted stress and strain of every cell into `cells`.
 
-    Sets the tensors, normal, both principal axes of stress and strain, their
-    anisotropies, the von Mises stress, rest area and energies, and normalises the
-    microtubule axis, as Tissue's `update` does. The anisotropic energy also goes
-    into `young_transverse` (Tissue's slot 20, KNOWN_ISSUES T7).
+    Sets the (C, 3, 3) stress and strain tensors (Cauchy and Almansi, global axes), the
+    normal, both principal axes of stress and strain (ranked by |value|, KNOWN_ISSUES
+    T5; Jacobi signs as in Tissue, T4), their anisotropies, the von Mises stress (T10),
+    the total rest area (T8) and the energies, and normalises `cells.microtubule`, as
+    Tissue's `update` does. The anisotropic energy also goes into `young_transverse`
+    (Tissue's slot 20, T7). The reported stress is not exactly that of the force model
+    (T6). A vanishing fibre direction consumes `rand_state` (T1).
+
+    Raises:
+        ZeroDivisionError: If a triangle is degenerate.
     """
     scratch = np.empty((3, 3))
     strain_mean = np.empty((3, 3))

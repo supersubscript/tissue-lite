@@ -53,10 +53,17 @@ def compute_trbs_forces(
     vertex_forces: FloatArray,
     centre_forces: FloatArray,
 ) -> None:
-    """Adds the TRBS-MT forces to `vertex_forces` and `centre_forces`.
+    """Adds the TRBS-MT forces to `vertex_forces` (V, 3) and `centre_forces` (C, 3).
 
-    Without softening, also writes each cell's transverse modulus into
-    `cells.young_transverse` (Tissue's slot 20, KNOWN_ISSUES T7).
+    Both arrays are accumulated into, not zeroed. Reads `cells.young_longitudinal`,
+    `concentration` and `microtubule`; a vanishing fibre direction consumes `rand_state`
+    (KNOWN_ISSUES T1). Without softening, also writes each cell's transverse modulus
+    into `cells.young_transverse` (Tissue's slot 20, T7); with softening it is left
+    alone (C3). A triangle with a rest angle whose cosine is within 1e-4 of 1 gets
+    Tissue's sliver "fix" in place of its own forces (T3).
+
+    Raises:
+        ZeroDivisionError: If a rest triangle is degenerate (a zero or straight angle).
     """
     for c in range(mesh.offsets.shape[0] - 1):
         young_l, young_t = compute_moduli(
@@ -252,7 +259,12 @@ def compute_pressure_forces(
     vertex_forces: FloatArray,
     centre_forces: FloatArray,
 ) -> None:
-    """Adds `pressure * area / 2` along each triangle's normal to all three nodes."""
+    """Adds `pressure * area / 2` along each triangle's normal to all three nodes.
+
+    `pressure` is the current, ramped value. The consistent share would be area / 3
+    (KNOWN_ISSUES P1). Accumulates into `vertex_forces` and `centre_forces`; the normal
+    follows the cyclic vertex order of `Topology`.
+    """
     offsets = mesh.offsets
     for c in range(offsets.shape[0] - 1):
         for t in range(offsets[c], offsets[c + 1]):

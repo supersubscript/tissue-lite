@@ -19,7 +19,9 @@ class Topology:
     """Each cell's walls and vertices in cyclic order.
 
     Cell c owns entries `offsets[c]:offsets[c + 1]` of `cell_vertices` and `cell_walls`;
-    wall k of a cell joins its vertices k and k + 1.
+    wall k of a cell joins its vertices k and k + 1 (the last wraps to the first).
+    `wall_cells` names each wall's two cells, with `BACKGROUND` (-1) for the outside.
+    Treated as read-only: copies of a `Tissue` share it.
     """
 
     wall_cells: IntArray  # (W, 2); BACKGROUND for the outside
@@ -68,8 +70,11 @@ def build_topology(
 ) -> Topology:
     """Builds the cyclic cell connectivity exactly as Tissue's `readInit` does.
 
+    `wall_cells` and `wall_vertices` are (W, 2) int arrays, `BACKGROUND` (-1) marking
+    the outside of a boundary wall; they are stored without copying.
+
     Raises:
-        ValueError: If a cell cannot be sorted into one closed loop.
+        ValueError: If a cell's walls do not close into one consistently oriented loop.
     """
     cell_walls: list[list[int]] = [[] for _ in range(num_cells)]
     cell_verts: list[list[int]] = [[] for _ in range(num_cells)]

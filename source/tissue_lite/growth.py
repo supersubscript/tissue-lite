@@ -32,7 +32,11 @@ type EdgeComponents = tuple[
 
 @dataclass(frozen=True)
 class StrainGrowth:
-    """Extends rest lengths along and across the growth axis above a threshold."""
+    """Extends rest lengths along and across the growth axis above a threshold.
+
+    `threshold` is compared with `growth_signal` (a strain) and `stress_max` (a stress,
+    KNOWN_ISSUES G2); growth runs every step (G1).
+    """
 
     rate: float
     threshold: float
@@ -51,9 +55,14 @@ def update_growth(
     """Applies one explicit growth update of length h to the rest lengths in `mesh`.
 
     Each triangle's three rest edges are split into components along and across
-    the growth axis; the component whose signal exceeds `threshold` grows by
-    `rate * h * (signal - threshold)`. `cells.growth_count` records the branches
-    taken.
+    the growth axis, `cells.microtubule`. The along components are scaled by
+    `1 + rate * h * (growth_signal - threshold)` where the signal exceeds `threshold`,
+    the across ones likewise with `stress_max` (KNOWN_ISSUES G2). Writes `mesh.spokes`
+    and `mesh.wall_extensions` in place, and the branch count into `cells.growth_count`
+    (G3). `h` is the solver's trial step (S2).
+
+    Raises:
+        ZeroDivisionError: If a cell's microtubule axis is zero or normal to a triangle.
     """
     for c in range(mesh.offsets.shape[0] - 1):
         cells.growth_count[c] = 0

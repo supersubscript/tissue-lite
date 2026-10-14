@@ -46,7 +46,11 @@ def _shrunk_points(tissue: Tissue) -> FloatArray:
 
 
 def format_cells(tissue: Tissue, layout: SlotLayout) -> str:
-    """Returns the cell VTU file contents."""
+    """Returns the cell VTU file contents, with cell variables numbered by `layout`.
+
+    Each cell's vertices are moved 10% towards its centroid (`WALL_RELATIVE_THICKNESS`)
+    and values are written with `%g`, which keeps six significant digits.
+    """
     topo = tissue.topology
     sizes = topo.cell_sizes
     points = _shrunk_points(tissue)
@@ -88,7 +92,12 @@ def format_cells(tissue: Tissue, layout: SlotLayout) -> str:
 
 
 def format_walls(tissue: Tissue) -> str:
-    """Returns the wall VTU file contents (one quad per cell wall)."""
+    """Returns the wall VTU file contents (one quad per cell wall).
+
+    Wall variables are written in pairs of columns, one per side of the wall; each quad
+    takes its cell's side (the last column serves both sides when the count is odd).
+    Values use `%g`.
+    """
     topo = tissue.topology
     n_cell_walls = len(topo.cell_walls)
     out = ['<VTKFile type="UnstructuredGrid" version="0.1">\n<UnstructuredGrid>\n']
@@ -139,7 +148,11 @@ def format_walls(tissue: Tissue) -> str:
 
 
 def format_pvd(n_frames: int) -> str:
-    """Returns Tissue's `tissue.pvd`, listing all frames up front."""
+    """Returns Tissue's `tissue.pvd`, listing `n_frames` frames up front.
+
+    Each frame has a cells and a walls dataset. For `n_frames > 2` the run writes one
+    more frame than is listed (KNOWN_ISSUES S6).
+    """
     lines = ['<?xml version="1.0"?> ', '<VTKFile type="Collection" version="0.1" > ']
     lines.append("<Collection> ")
     for i in range(n_frames):
@@ -152,7 +165,11 @@ def format_pvd(n_frames: int) -> str:
 
 
 class VtuWriter:
-    """Writes frames as `VTK_cells%06d.vtu` / `VTK_walls%06d.vtu` plus `tissue.pvd`."""
+    """Writes frames as `VTK_cells%06d.vtu` / `VTK_walls%06d.vtu` plus `tissue.pvd`.
+
+    The PVD lists `n_frames` frames; `layout` numbers the cell variables. Existing files
+    of the same name in `directory` are overwritten.
+    """
 
     def __init__(self, directory: Path, n_frames: int, layout: SlotLayout) -> None:
         self.directory = directory
@@ -160,7 +177,10 @@ class VtuWriter:
         self.layout = layout
 
     def write(self, index: int, tissue: Tissue) -> None:
-        """Writes frame `index`; the first call also writes the PVD collection."""
+        """Writes frame `index`, creating the directory if needed.
+
+        Index 0 also writes `tissue.pvd`.
+        """
         self.directory.mkdir(parents=True, exist_ok=True)
         if index == 0:
             (self.directory / "tissue.pvd").write_text(format_pvd(self.n_frames))

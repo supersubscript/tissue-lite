@@ -2,9 +2,10 @@
 
 Only vertex positions and cell centres have non-zero derivatives, so only they are
 integrated; every other variable is carried through each step unchanged, exactly as
-Tissue's `y + h * 0` does. Kept as in Tissue: the step is capped at `max_step` after
-every step, per-step updates receive the trial step rather than the accepted one,
-and the error scale is `|y| + |h dy| + 1e-9 tolerance`.
+Tissue's `y + h * 0` does (KNOWN_ISSUES S3 is therefore not ported). Kept as in
+Tissue: the step is capped at `max_step` after every step (S1), per-step updates
+receive the trial step rather than the accepted one (S2), and the error scale is
+`|y| + |h dy| + 1e-9 tolerance`.
 """
 
 import math
@@ -42,7 +43,14 @@ _DC6 = _C6 - 0.25
 
 @dataclass(frozen=True)
 class CashKarp:
-    """Tissue's RK5Adaptive settings: initial and maximal step, relative tolerance."""
+    """Tissue's RK5Adaptive settings: initial and maximal step, relative tolerance.
+
+    `max_step` is both the initial step and the cap applied after every step
+    (KNOWN_ISSUES S1), so error control can only shrink steps.
+
+    Raises:
+        ValueError: If `max_step` or `tolerance` is not positive.
+    """
 
     max_step: float = 5e-3
     tolerance: float = 1e-4
@@ -70,7 +78,15 @@ class CashKarpRun:
         self.h = config.max_step
 
     def step(self, t: float, t_bound: float, derivatives: FloatArray) -> StepResult:
-        """Takes one accepted step; `update` gets the trial step, as in Tissue."""
+        """Takes one accepted step from t, no further than t_bound.
+
+        `derivatives` are those of the current positions. The step shrinks until the
+        scaled error passes; the per-step updates then get the trial step, not the
+        accepted one (KNOWN_ISSUES S2), and `accepted` is False if it had to shrink.
+
+        Raises:
+            RuntimeError: If the step size underflows.
+        """
         state = self.state
         h = self.h
         scale = (

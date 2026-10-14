@@ -27,8 +27,14 @@ _FIELD_SHAPES: dict[str, tuple[int, ...]] = {
 class CellState(NamedTuple):
     """Per-cell arrays, (C,) or (C, 3) unless noted, updated in place by the kernels.
 
+    Directions are global-frame vectors, normalised by the kernels except
+    `strain_perpendicular` (KNOWN_ISSUES T9); the tensors are (C, 3, 3). Stresses are in
+    the unit of the Young's moduli, strains are dimensionless, `velocity` is a length
+    per time and the angle fields are |cos|. `growth_signal` is Tissue's slot 3, read by
+    growth (G2).
+
     A NamedTuple rather than a dataclass so that Numba kernels take it directly.
-    `volume_change` is a tissue-level diagnostic that Tissue stores in cells 1-3;
+    `volume_change` is a tissue-level diagnostic that Tissue stores in cells 1-3 (L2);
     `extra` holds the legacy cell-variable columns no field maps to, so that files
     round-trip unchanged.
     """
@@ -81,12 +87,18 @@ class CellState(NamedTuple):
         return len(self.growth_signal)
 
     def copy(self) -> CellState:
+        """Returns a deep copy; no array is shared with this state."""
         return CellState(*(a.copy() for a in self))
 
 
 @dataclass
 class Tissue:
-    """A cell tissue: topology plus every state variable the simulation carries."""
+    """A cell tissue: topology plus every state variable the simulation carries.
+
+    Mutable. `vertices` is (V, 3) in Tissue's length units, `wall_lengths` (W,) rest
+    lengths and `wall_variables` (W, n) values carried through unchanged. `ModelState`
+    rebinds `vertices` to a view of its positions, and the solver writes through it.
+    """
 
     topology: Topology
     vertices: FloatArray  # (V, 3)
@@ -95,7 +107,7 @@ class Tissue:
     cells: CellState
 
     def copy(self) -> Tissue:
-        """Returns a deep copy of the state; the topology is shared."""
+        """Returns a deep copy, detached from any `ModelState`; shares the topology."""
         return replace(
             self,
             vertices=self.vertices.copy(),
@@ -113,7 +125,10 @@ def compute_row_norms(rows: FloatArray) -> FloatArray:
 
 
 def compute_cell_centroids(tissue: Tissue) -> FloatArray:
-    """Returns Tissue's `positionFromVertex`: wall midpoints weighted by wall length."""
+    """Returns the (C, 3) cell centres as Tissue's `positionFromVertex` computes them.
+
+    Each is the mean of the cell's wall midpoints weighted by current wall length.
+    """
     topo = tissue.topology
     ends = tissue.vertices[topo.wall_vertices[topo.cell_walls]]  # (sum N, 2, 3)
     length = compute_row_norms(ends[:, 0] - ends[:, 1])

@@ -2,7 +2,7 @@
 
 Ports `Calculate::AngleVectors`, `TemplateVolumeChange` and
 `Calculate::VertexVelocity` from Tissue e74e457. They run inside the force
-evaluation, so they describe the state at the start of each step.
+evaluation, so they describe the state at the start of each step (KNOWN_ISSUES S5).
 """
 
 import numba
@@ -32,10 +32,11 @@ def _write_angle_cosines(
 
 
 def update_angle_diagnostics(cells: CellState) -> None:
-    """Writes the microtubule–stress and stress–strain angles, in Tissue's order.
+    """Writes |cos| of the microtubule–stress and stress–strain angles.
 
-    Normalises the microtubule, stress and strain axes as a side effect (the stress
-    axis twice, which can change its last bit).
+    Normalises the microtubule, stress and strain axes in place as a side effect, in
+    Tissue's order (the stress axis twice, which can change its last bit). Zero axes
+    stay zero.
     """
     _write_angle_cosines(
         cells.microtubule, cells.stress_direction, cells.angle_mt_stress
@@ -52,7 +53,13 @@ def update_volume_change(
     rest_positions: FloatArray,
     vertex_forces: FloatArray,
 ) -> None:
-    """Stores (total displacement, its change since the last call, total speed)."""
+    """Stores (total displacement, its change since the last call, total speed).
+
+    The displacement is the sum over vertices of |vertices - rest_positions|, the speed
+    the sum of |vertex_forces|, all (V, 3). `volume_change` (3,) is written in place and
+    keeps the previous displacement between calls. Pass the forces before boundary
+    zeroing, as Tissue does (KNOWN_ISSUES L2).
+    """
     change = 0.0
     total = 0.0
     for v in range(vertices.shape[0]):
@@ -72,7 +79,11 @@ def update_cell_velocity(
     cell_vertices: IntArray,
     vertex_forces: FloatArray,
 ) -> None:
-    """Stores each cell's mean vertex speed (the forces are the velocities)."""
+    """Stores each cell's mean vertex speed (the forces are the velocities).
+
+    `velocity` (C,) is written in place. `ModelState` passes the forces after boundary
+    zeroing, so fixed vertices count as 0.
+    """
     for c in range(len(offsets) - 1):
         total = 0.0
         for k in range(offsets[c], offsets[c + 1]):

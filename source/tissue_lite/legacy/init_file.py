@@ -15,7 +15,7 @@ from tissue_lite.topology import build_topology
 
 
 def read_init(path: Path, layout: SlotLayout = SlotLayout()) -> Tissue:
-    """Reads a Tissue `.init` file (without a stored centre triangulation)."""
+    """Reads a Tissue `.init` file (no centre triangulation); raises as `parse_init`."""
     return parse_init(path.read_text(), layout)
 
 
@@ -28,7 +28,9 @@ def parse_init(text: str, layout: SlotLayout = SlotLayout()) -> Tissue:
     """Parses the contents of a Tissue `.init` file.
 
     Raises:
-        ValueError: If the counts in the file are inconsistent.
+        ValueError: If the file is truncated, malformed or inconsistent (counts, wall
+            order), a cell does not close into one loop, or there are fewer than 35
+            cell variables.
     """
     tokens = text.split()
     pos = 0

@@ -10,9 +10,10 @@ _DISCARD = 310
 
 
 def make_rand_state(seed: int = 1) -> NDArray[np.int64]:
-    """Returns the generator state after glibc's `srand(seed)`.
+    """Returns the (32,) int64 generator state after glibc's `srand(seed)`.
 
-    The first 31 entries are the ring buffer; the last is the step counter.
+    The first 31 entries are the ring buffer; the last is the step counter. Seed 0
+    becomes 1, and the default 1 is Tissue's unseeded state (KNOWN_ISSUES T1).
     """
     r = np.zeros(_DEGREE + 1, dtype=np.int64)
     r[0] = seed if seed != 0 else 1
@@ -42,5 +43,5 @@ def _next(r: NDArray[np.int64]) -> int:
 
 @numba.njit(cache=True)
 def glibc_rand(r: NDArray[np.int64]) -> int:
-    """Returns the next `rand()` value in [0, 2^31)."""
+    """Returns the next `rand()` value in [0, 2^31), advancing `r` in place."""
     return _next(r) >> 1

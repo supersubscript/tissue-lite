@@ -18,13 +18,14 @@ type ShapeVectors = tuple[tuple[float, float], tuple[float, float], tuple[float,
 
 
 class TriangleMesh(NamedTuple):
-    """Index arrays and rest lengths of the centre triangles.
+    """Index arrays and rest lengths of the centre triangles (T = sum of cell sizes).
 
     Triangle t of cell c (`offsets[c] <= t < offsets[c + 1]`) joins the centre to
     the cell's vertices k and k + 1 across `wall[t]`. Tissue stores one spoke rest
     length per vertex unless the membrane uses double rest lengths; here every
     triangle owns both spokes, and without growth the shared values stay equal.
-    `wall_lengths` is the tissue's own array.
+    `update_growth` writes `spokes` and `wall_extensions` in place; `wall_lengths` is
+    the tissue's own array, not a copy.
     """
 
     offsets: IntArray  # (C + 1,)
@@ -37,11 +38,11 @@ class TriangleMesh(NamedTuple):
 
 
 class TriangleGeometry(NamedTuple):
-    """One centre triangle in its current configuration.
+    """One centre triangle in its current configuration (Tissue's length units).
 
     `lengths` are centre-vertex a, vertex a-vertex b (the wall) and centre-vertex b.
-    The local frame is Tissue's: `x_axis` along the wall from a to b, `normal` the
-    unit x × (centre - a), `y_axis` = normal × x.
+    The local frame is Tissue's and orthonormal: `x_axis` along the wall from a to b,
+    `normal` the unit x × (centre - a), `y_axis` = normal × x.
     """
 
     centre: Vector
@@ -57,7 +58,8 @@ def build_triangle_mesh(tissue: Tissue, centres: FloatArray) -> TriangleMesh:
     """Triangulates every cell from its centre, as `CenterTriangulation::Initiate`.
 
     Spoke rest lengths are the current centre-vertex distances; the walls keep the
-    tissue's rest lengths.
+    tissue's rest lengths (shared, not copied) and `wall_extensions` start at 0.
+    `centres` is (C, 3), and triangle t is entry t of `topology.cell_vertices`.
     """
     topology = tissue.topology
     vertex_a = topology.cell_vertices
@@ -99,7 +101,7 @@ def dot(a: Vector, b: Vector) -> float:
 
 @numba.njit(cache=True)
 def norm(v: Vector) -> float:
-    """Returns |v|."""
+    """Returns |v|, the squares summed left to right."""
     return np.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
 
 
@@ -148,7 +150,13 @@ def compute_triangle_geometry(
     c: int,
     t: int,
 ) -> TriangleGeometry:
-    """Positions, edge lengths and local frame of triangle t of cell c."""
+    """Returns the positions, edge lengths and local frame of triangle t of cell c.
+
+    `t` must lie in cell c's range of `mesh.offsets`; this is not checked.
+
+    Raises:
+        ZeroDivisionError: If the triangle is degenerate (a zero edge, or collinear).
+    """
     a = mesh.vertex_a[t]
     b = mesh.vertex_b[t]
     centre = (centres[c, 0], centres[c, 1], centres[c, 2])
@@ -191,14 +199,17 @@ def compute_triangle_area(lengths: Vector) -> float:
 
 @numba.njit(cache=True)
 def compute_cosine(a: float, b: float, opposite: float) -> float:
-    """Law of cosines: the cosine of the angle between the sides a and b."""
+    """Law of cosines: the cosine of the angle between sides a and b, not clamped."""
     return (a * a + b * b - opposite * opposite) / (a * b * 2)
 
 
 @numba.njit(cache=True)
 def compute_plane_coordinates(lengths: Vector) -> Vector:
-    """Lays the triangle flat: vertex a at the origin, b at (wall, 0), the centre at
-    (centre_x, centre_y). Returns (centre_x, wall, centre_y)."""
+    """Returns (centre_x, wall, centre_y) with a at the origin and b at (wall, 0).
+
+    `lengths` are ordered as in `TriangleGeometry`; centre_y is NaN if they violate the
+    triangle inequality.
+    """
     to_a, wall, to_b = lengths
     cos_a = compute_cosine(to_a, wall, to_b)
     return cos_a * to_a, wall, np.sqrt(1 - cos_a * cos_a) * to_a
@@ -206,8 +217,13 @@ def compute_plane_coordinates(lengths: Vector) -> Vector:
 
 @numba.njit(cache=True)
 def compute_shape_vectors(rest_plane: Vector) -> ShapeVectors:
-    """Barycentric gradients of (centre, vertex a, vertex b) in the rest plane
-    (Tissue's `ShapeVectorRest`)."""
+    """Returns the barycentric gradients of (centre, a, b) in the rest plane.
+
+    Tissue's `ShapeVectorRest`; `rest_plane` comes from `compute_plane_coordinates`.
+
+    Raises:
+        ZeroDivisionError: If the rest triangle is degenerate.
+    """
     centre_x, wall, centre_y = rest_plane
     return (
         (0.0, 1 / centre_y),
@@ -230,7 +246,10 @@ def compute_deformation_gradient(plane: Vector, shape: ShapeVectors) -> Matrix2:
 def compute_deformation(
     lengths: Vector, rest_lengths: Vector
 ) -> tuple[float, ShapeVectors, Matrix2]:
-    """Returns the rest area, the rest shape vectors and the deformation gradient."""
+    """Returns the rest area, the rest shape vectors and the deformation gradient.
+
+    Both length triples are ordered as `TriangleGeometry.lengths`.
+    """
     rest_area = compute_triangle_area(rest_lengths)
     shape = compute_shape_vectors(compute_plane_coordinates(rest_lengths))
     gradient = compute_deformation_gradient(compute_plane_coordinates(lengths), shape)
@@ -248,8 +267,11 @@ def compute_green_strain(gradient: Matrix2) -> Matrix2:
 def pull_back_direction(
     gradient: Matrix2, x_axis: Vector, y_axis: Vector, direction: Vector
 ) -> tuple[float, float]:
-    """Projects a direction onto the triangle and maps it to the rest plane with
-    adj(F): F⁻¹ without the 1/det F (KNOWN_ISSUES T2). Unnormalised."""
+    """Returns `direction` projected onto the triangle and mapped to the rest plane.
+
+    The map is adj(F), F⁻¹ without the 1/det F (KNOWN_ISSUES T2). The result is not
+    normalised and is zero for a direction along the triangle's normal.
+    """
     local_x = dot(x_axis, direction)
     local_y = dot(y_axis, direction)
     return (

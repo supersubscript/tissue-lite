@@ -21,14 +21,14 @@ class StepResult:
 
 
 class StepRun(Protocol):
-    """One solver bound to one model state."""
+    """One solver bound to one model state.
+
+    `step` takes the derivatives of the current state, which the driver evaluates first
+    so that their diagnostics precede any frame written at t.
+    """
 
     def step(self, t: float, t_bound: float, derivatives: FloatArray) -> StepResult:
-        """Advances the state from t to at most t_bound and applies `update`.
-
-        `derivatives` are those of the current state, already evaluated by the
-        driver so that their diagnostics precede any frame written at t.
-        """
+        """Advances from t to at most t_bound, then applies the model's `update`."""
         ...
 
 

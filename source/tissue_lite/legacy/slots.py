@@ -2,7 +2,7 @@
 
 The numbering is fixed by the retained model files; `SlotLayout` converts between
 it and `CellState` for the `.init` and VTU formats, and the model reader validates
-model files against the slot constants.
+model files against the slot constants (KNOWN_ISSUES L1).
 """
 
 from dataclasses import dataclass
@@ -74,9 +74,10 @@ class SlotLayout:
     """Tissue's cell-variable numbering for one model.
 
     `second_axes` is the growth models' storage: the perpendicular strain axis in
-    slots 26-29 and the second stress axis in 31-34, over the normal. Columns no
-    field maps to (12-15, 25, the second-axis slots when unused, and everything
-    from 35 on except the concentration) pass through `CellState.extra`.
+    slots 26-29 and the second stress axis in 31-34, over the normal (KNOWN_ISSUES T9).
+    `concentration_slot` is the column holding the softening concentration, if any.
+    Columns no field maps to (12-15, 25, the second-axis slots when unused, and
+    everything from 35 on except the concentration) pass through `CellState.extra`.
     """
 
     second_axes: bool = False
@@ -100,7 +101,9 @@ class SlotLayout:
         return columns
 
     def from_cell_variables(self, values: FloatArray) -> CellState:
-        """Builds the named state from Tissue's (C, n) cell variables.
+        """Builds the named state from Tissue's (C, n) cell variables, copying them.
+
+        `volume_change` is read from slot 25 of cells 1-3 (KNOWN_ISSUES L2).
 
         Raises:
             ValueError: If there are fewer than 35 columns.
@@ -121,7 +124,9 @@ class SlotLayout:
     def to_cell_variables(self, tissue: Tissue) -> FloatArray:
         """Returns Tissue's (C, n) cell variables, writing slots in Tissue's order.
 
-        A state built without legacy columns (`CellState.zeros`) leaves them 0.
+        With `second_axes` the second stress axis overwrites the normal (KNOWN_ISSUES
+        T9). `volume_change` goes into slot 25 of cells 1-3 (L2). A state built without
+        legacy columns (`CellState.zeros`) leaves them 0.
         """
         cells = tissue.cells
         extra_base = len(_UNUSED) + (0 if self.second_axes else len(_SECOND_AXES))

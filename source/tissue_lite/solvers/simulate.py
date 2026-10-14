@@ -2,7 +2,7 @@
 
 The schedule is Tissue's own (`RK5Adaptive::simulate`): with more than two frames
 it prints t_end twice, just before the last step and after it, and the VTU tests
-pin that (see KNOWN_ISSUES).
+pin that (KNOWN_ISSUES S6).
 """
 
 import logging
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Frame:
-    """One printed time point; `tissue.cells` carries the stress and strain."""
+    """One printed time point; `tissue` is a copy, with stress and strain in `cells`."""
 
     time: float
     tissue: Tissue
@@ -30,7 +30,11 @@ class Frame:
 
 @dataclass(frozen=True)
 class SimulationResult:
-    """Printed frames and step statistics of one run; `final` is the end state."""
+    """Printed frames and step statistics of one run; `final` is the end state.
+
+    `frames` holds `n_frames` frames, one more for `n_frames > 2` (KNOWN_ISSUES S6). A
+    step counts as rejected when its trial step had to shrink.
+    """
 
     frames: list[Frame]
     accepted_steps: int
@@ -55,6 +59,9 @@ def simulate(
     """Runs the model from t_start to t_end, printing n_frames frames as Tissue does.
 
     The input tissue is not modified. A `writer` also receives every frame.
+    `n_frames` of 0 prints nothing, 1 the end state, 2 the start and end, more evenly
+    spaced frames with t_end twice (KNOWN_ISSUES S6). Each call restarts `rand()` from
+    seed 1 (T1).
 
     Raises:
         ValueError: If the time span is empty.
@@ -72,7 +79,14 @@ def integrate(
     solver: Stepper,
     writer: VtuWriter | None = None,
 ) -> SimulationResult:
-    """Port of the frame loop of `RK5Adaptive::simulate` on an initiated model state."""
+    """Port of the frame loop of `RK5Adaptive::simulate` on an initiated model state.
+
+    Advances `state` and its tissue in place; `simulate` runs it on a copy.
+
+    Raises:
+        ValueError: If `t_end` does not exceed `t_start`.
+        RuntimeError: If the step size underflows.
+    """
     if not (t_end - t_start > 0.0):
         raise ValueError("t_end must exceed t_start")
     run = solver.start(state)
@@ -130,8 +144,9 @@ def prerun_and_simulate(
     """Reproduces flower-experiments' `prerunAndSim.sh`: prerun, then main run.
 
     The main run starts from the prerun's final state as Tissue re-reads it from
-    `-init_output`: cell variables and positions kept, centre triangulation rebuilt.
-    Both runs write their frames through the same `writer`.
+    `-init_output`: cell variables and positions kept, centre triangulation rebuilt,
+    `rand()` restarted. Both runs write their frames through the same `writer`; the main
+    run's frame indices restart at 0, so its files overwrite the prerun's.
     """
     prerun = simulate(
         prerun_model, tissue, prerun_t_end, prerun_frames, prerun_solver, writer=writer

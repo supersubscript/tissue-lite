@@ -46,7 +46,11 @@ class MeristemModel:
     """Everything that defines a simulation except the mesh and the solver.
 
     Without `track_velocity` the cell velocity keeps its initial value, as in
-    Tissue models lacking `Calculate::VertexVelocity`.
+    Tissue models lacking `Calculate::VertexVelocity`, so the velocity gates see a
+    constant (KNOWN_ISSUES F3).
+
+    Raises:
+        ValueError: If `growth` is set without `membrane.double_rest_lengths`.
     """
 
     membrane: TRBSMembrane
@@ -63,7 +67,13 @@ class MeristemModel:
 
     @classmethod
     def from_toml(cls, path: Path) -> MeristemModel:
-        """Reads a model written by `to_toml`."""
+        """Reads a model written by `to_toml`.
+
+        Raises:
+            KeyError: If the `membrane` or `pressure` table is missing.
+            TypeError: If a table has an unknown or missing key.
+            ValueError: If the TOML is malformed or a parameter fails its validation.
+        """
         tables = tomllib.loads(path.read_text())
         membrane = dict(tables["membrane"])
         if "softening" in membrane:
@@ -122,9 +132,13 @@ def _toml_value(value: TomlValue) -> str:
 class ModelState:
     """A model bound to a tissue, with the hidden state Tissue's reactions carry.
 
-    `positions` holds the integrated variables, the vertices followed by the cell
-    centres; `tissue.vertices` is a view of its first rows. The tissue is modified
-    in place. `fixed` marks the vertex components the boundary holds still.
+    `positions` (V + C, 3) holds the integrated variables, the vertices followed by the
+    cell centres; `tissue.vertices` is a view of its first V rows. The tissue is
+    modified in place and its `vertices` must not be reassigned. Construction also
+    initiates the fibres and microtubules, writing `tissue.cells`. `rest_positions` are
+    the vertices at construction and `fixed` (V, 3) marks the components the boundary
+    holds still. `pressure_factor` ramps from 0 to 1 by `h / ramp_time` per accepted
+    step (KNOWN_ISSUES P2). The force and stress evaluations consume `rand_state` (T1).
     """
 
     model: MeristemModel
@@ -170,15 +184,17 @@ class ModelState:
         return self.positions[self.tissue.topology.num_vertices :]
 
     def compute_forces(self) -> FloatArray:
-        """`compute_forces_at` on the current state."""
+        """Evaluates `compute_forces_at` on the real state, keeping its diagnostics."""
         return self.compute_forces_at(self.tissue.cells, self.positions)
 
     def compute_forces_at(self, cells: CellState, positions: FloatArray) -> FloatArray:
-        """Returns the derivative of `positions` (vertices, then centres).
+        """Returns the (V + C, 3) derivative of `positions` (vertices, then centres).
 
-        Writes the diagnostics (angles, volume change, velocity) and, without
-        softening, the transverse moduli into `cells`; zeroes the fixed boundary
-        components.
+        `positions` may be a trial state. Writes the diagnostics (angles, volume change,
+        velocity) and, without softening, the transverse moduli into `cells`, so stage
+        evaluations pass a copy of the cells (KNOWN_ISSUES S5). Uses the current
+        `pressure_factor`. Zeroes the fixed boundary components after the volume
+        diagnostic (L2). A vanishing fibre direction consumes `rand_state` (T1).
         """
         num_vertices = self.tissue.topology.num_vertices
         vertices, centres = positions[:num_vertices], positions[num_vertices:]
@@ -217,7 +233,12 @@ class ModelState:
         return derivatives
 
     def update(self, h: float) -> None:
-        """Applies the per-step updates of length h in Tissue's order."""
+        """Applies the per-step updates of length h in Tissue's order.
+
+        Evaluates at the current `positions` and writes `tissue.cells` and the mesh rest
+        lengths in place. The solver passes the trial step, not the accepted one
+        (KNOWN_ISSUES S2).
+        """
         model, tissue = self.model, self.tissue
         cells = tissue.cells
         if self._fibres is not None:
