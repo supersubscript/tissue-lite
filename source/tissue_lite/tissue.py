@@ -354,7 +354,7 @@ def _sort_cell(
     cell_verts[cell] = sorted_verts
 
 
-def cell_centroids(tissue: Tissue) -> FloatArray:
+def compute_cell_centroids(tissue: Tissue) -> FloatArray:
     """Returns Tissue's `positionFromVertex`: wall midpoints weighted by wall length."""
     topo = tissue.topology
     ends = tissue.vertices[topo.wall_vertices[topo.cell_walls]]  # (sum N, 2, 3)

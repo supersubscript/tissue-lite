@@ -85,5 +85,5 @@ def test_stress_threshold_needs_velocity_threshold() -> None:
 
 
 def test_fibre_moduli_fall_back_to_membrane() -> None:
-    assert FibreStiffness(rate=1.0).moduli(1.0, 2.0) == (1.0, 2.0)
-    assert FibreStiffness(rate=1.0, young_matrix=5.0).moduli(1.0, 2.0) == (5.0, 2.0)
+    assert FibreStiffness(rate=1.0).get_moduli(1.0, 2.0) == (1.0, 2.0)
+    assert FibreStiffness(rate=1.0, young_matrix=5.0).get_moduli(1.0, 2.0) == (5.0, 2.0)

@@ -96,8 +96,8 @@ Also:
 # Project idioms — always
 - Logging → `import logging; logger = logging.getLogger(__name__)`. `print` is forbidden in library code.
 - Imports → absolute, from the concrete module path.
-- Data models → frozen dataclasses, with a `parse` classmethod for filename identities; `Protocol` for structural interfaces; `TypedDict` only for narrow I/O shapes.
-- Dataframes → tab-separated CSV, `index=False`, unless another format is required.
+- Data models → frozen dataclasses; `Protocol` for structural interfaces; `TypedDict` only for narrow I/O shapes.
+- Legacy file formats (`.init`, `.model`, solver files) are parsed in `tissue` and `legacy`; parsers raise `ValueError` on anything outside the supported subset.
 
 # Testing
 ```python
@@ -112,9 +112,10 @@ def test_timepoint_rejects_other_names() -> None:
         TimepointId.parse("notes.csv")
 ```
 
-- Flat layout: `tests/test_<module>.py`, functions `test_*`. Build small synthetic arrays and dataframes inline; tests must not read `data/`.
+- Flat layout: `tests/test_<module>.py`, functions `test_*`. Build small synthetic meshes and arrays inline; fidelity tests read only `tests/data/` through the `tests/conftest.py` fixtures.
 - `uv run pytest [path]` is canonical.
-- Code that needs a lab package (`cellygon`, `ants`) is not unit-tested; keep the logic around it in pure functions that are.
+- Fidelity tests compare against Tissue output with exact equality where the case is bit-exact; never loosen a tolerance to make a test pass.
+- Long fidelity runs carry `@pytest.mark.slow` and are excluded by default.
 - `@pytest.mark.parametrize` over loops for multi-case assertions.
 - `pytest.raises(SpecificError)`, never bare `Exception`.
 - Moving or renaming a module → grep `tests/` and call sites for the old path.

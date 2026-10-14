@@ -18,14 +18,14 @@ from tissue_lite.tissue import (
     FloatArray,
     Tissue,
     build_topology,
-    cell_centroids,
+    compute_cell_centroids,
 )
 
 
 def cut_patch(tissue: Tissue, n_cells: int) -> Tissue:
     """Returns the n_cells cells nearest (breadth-first) to the highest cell."""
     topo = tissue.topology
-    start = int(np.argmax(cell_centroids(tissue)[:, 2]))
+    start = int(np.argmax(compute_cell_centroids(tissue)[:, 2]))
     neighbours: list[list[int]] = [[] for _ in range(topo.num_cells)]
     for c1, c2 in topo.wall_cells.tolist():
         if BACKGROUND not in (c1, c2):

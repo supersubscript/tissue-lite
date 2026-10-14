@@ -45,7 +45,7 @@ def test_no_forces_at_rest_without_pressure() -> None:
         boundary=Boundary(fixed_axes=()),
     )
     state = _rest_state(model)
-    vd, cd = state.derivatives(
+    vd, cd = state.compute_derivatives(
         state.tissue.cell_variables, state.triangulation.centres, state.tissue.vertices
     )
     np.testing.assert_allclose(vd, 0.0, atol=1e-10)
@@ -60,7 +60,7 @@ def test_internal_forces_balance() -> None:
     )
     state = _rest_state(model)
     stretched = state.tissue.vertices * 1.05
-    vd, cd = state.derivatives(
+    vd, cd = state.compute_derivatives(
         state.tissue.cell_variables, state.triangulation.centres * 1.05, stretched
     )
     assert np.abs(vd).max() > 1e-3
@@ -76,7 +76,7 @@ def test_boundary_vertices_do_not_move_along_fixed_axes(axes: tuple[int, ...]) -
     )
     state = _rest_state(model)
     state.update(1.0)
-    vd, _ = state.derivatives(
+    vd, _ = state.compute_derivatives(
         state.tissue.cell_variables, state.triangulation.centres, state.tissue.vertices
     )
     edge = state.tissue.topology.boundary
@@ -106,7 +106,7 @@ def test_softening_scales_forces() -> None:
         t.cell_variables[:, 41] = concentration
         t.vertices *= 1.02
         state = ModelState(model=model, tissue=t)
-        vd, _ = state.derivatives(
+        vd, _ = state.compute_derivatives(
             t.cell_variables, state.triangulation.centres, t.vertices
         )
         return float(np.abs(vd).max())
@@ -117,11 +117,11 @@ def test_softening_scales_forces() -> None:
 
 def test_cell_mechanics_after_update() -> None:
     state = case_state(CASES_DIR / "sweep_120_120")
-    state.derivatives(
+    state.compute_derivatives(
         state.tissue.cell_variables, state.triangulation.centres, state.tissue.vertices
     )
     state.update(1e-3)
-    mech = state.cell_mechanics()
+    mech = state.get_cell_mechanics()
     n = state.tissue.topology.num_cells
     assert mech.stress_tensor.shape == (n, 3, 3)
     np.testing.assert_allclose(

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tissue_lite.tissue import FloatArray, Tissue, cell_centroids
+from tissue_lite.tissue import FloatArray, Tissue, compute_cell_centroids
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def _piece_header(n_points: int, n_cells: int) -> str:
 def _shrunk_points(tissue: Tissue) -> FloatArray:
     """Each cell's vertices moved 10% of the way towards its centroid."""
     topo = tissue.topology
-    centres = cell_centroids(tissue)[topo.triangle_cells]
+    centres = compute_cell_centroids(tissue)[topo.triangle_cells]
     p = tissue.vertices[topo.cell_vertices]
     return p + _CELL_SHRINK * (centres - p)
 

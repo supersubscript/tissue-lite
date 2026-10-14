@@ -204,7 +204,7 @@ def _random_direction(rand_state: NDArray[np.int64]) -> tuple[float, float]:
 
 
 @numba.njit(cache=True)
-def trbs_forces(
+def compute_trbs_forces(
     offsets: IntArray,
     tri_v2: IntArray,
     tri_v3: IntArray,
@@ -429,7 +429,7 @@ def trbs_forces(
 
 
 @numba.njit(cache=True)
-def pressure_forces(
+def compute_pressure_forces(
     offsets: IntArray,
     tri_v2: IntArray,
     tri_v3: IntArray,
@@ -600,7 +600,7 @@ def _rotate_tensor(rot: FloatArray, local: FloatArray, tmp: FloatArray) -> None:
 
 
 @numba.njit(cache=True)
-def trbs_update(
+def update_trbs(
     offsets: IntArray,
     tri_v2: IntArray,
     tri_v3: IntArray,

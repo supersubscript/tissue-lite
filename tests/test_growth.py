@@ -13,7 +13,7 @@ def test_growth_lengthens_rest_lengths_under_tension() -> None:
     state.triangulation.centres[:] *= 1.05
     spokes = state.triangulation.spokes.copy()
     walls = tissue.wall_lengths.copy()
-    state.derivatives(
+    state.compute_derivatives(
         tissue.cell_variables, state.triangulation.centres, tissue.vertices
     )
     state.update(1e-3)

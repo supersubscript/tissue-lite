@@ -38,7 +38,7 @@ from tissue_lite.tissue import (
     FloatArray,
     IntArray,
     Tissue,
-    cell_centroids,
+    compute_cell_centroids,
 )
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ def initiate_triangulation(tissue: Tissue, double: bool) -> CentreTriangulation:
     lengths are the current centre–vertex distances.
     """
     topo = tissue.topology
-    centres = cell_centroids(tissue)
+    centres = compute_cell_centroids(tissue)
     spoke = centres[topo.triangle_cells] - tissue.vertices[topo.cell_vertices]
     distances = np.sqrt(
         spoke[:, 0] * spoke[:, 0]
@@ -184,7 +184,7 @@ class ModelState:
         if model.fibres is not None:
             feedback.initiate_fibres(
                 model.fibres,
-                *model.fibres.moduli(membrane.young_matrix, membrane.young_fibre),
+                *model.fibres.get_moduli(membrane.young_matrix, membrane.young_fibre),
                 tissue.cell_variables,
             )
         tissue.triangulation = initiate_triangulation(
@@ -210,7 +210,7 @@ class ModelState:
             raise ValueError("Tissue has no centre triangulation")
         return self.tissue.triangulation
 
-    def derivatives(
+    def compute_derivatives(
         self,
         cell_vars: FloatArray,
         centres: FloatArray,
@@ -222,7 +222,7 @@ class ModelState:
         topo = self.tissue.topology
         vd = np.zeros_like(vertices)
         cd = np.zeros_like(centres)
-        mechanics.trbs_forces(
+        mechanics.compute_trbs_forces(
             topo.offsets,
             tri.v2,
             tri.v3,
@@ -241,7 +241,7 @@ class ModelState:
             vd,
             cd,
         )
-        mechanics.pressure_forces(
+        mechanics.compute_pressure_forces(
             topo.offsets,
             tri.v2,
             tri.v3,
@@ -290,9 +290,9 @@ class ModelState:
                 fibres.k_hill,
                 fibres.n_hill,
                 fibres.velocity_threshold,
-                *fibres.moduli(membrane.young_matrix, membrane.young_fibre),
+                *fibres.get_moduli(membrane.young_matrix, membrane.young_fibre),
             )
-        mechanics.trbs_update(
+        mechanics.update_trbs(
             topo.offsets,
             tri.v2,
             tri.v3,
@@ -321,7 +321,7 @@ class ModelState:
         if model.microtubules is not None:
             microtubules = model.microtubules
             feedback.update_microtubules(
-                cell_vars, h, microtubules.rate, *microtubules.gate()
+                cell_vars, h, microtubules.rate, *microtubules.get_gate()
             )
         if model.growth is not None:
             growth.update_growth(
@@ -343,7 +343,7 @@ class ModelState:
                 model.growth.threshold,
             )
 
-    def cell_mechanics(self) -> CellMechanics:
+    def get_cell_mechanics(self) -> CellMechanics:
         """Returns the stress and strain of the last update, with current slots.
 
         Raises:

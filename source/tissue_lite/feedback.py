@@ -38,7 +38,9 @@ class FibreStiffness:
     young_matrix: float | None = None
     young_fibre: float | None = None
 
-    def moduli(self, young_matrix: float, young_fibre: float) -> tuple[float, float]:
+    def get_moduli(
+        self, young_matrix: float, young_fibre: float
+    ) -> tuple[float, float]:
         """Returns (Ym, Yf), falling back to the given membrane moduli."""
         return (
             young_matrix if self.young_matrix is None else self.young_matrix,
@@ -65,7 +67,7 @@ class MicrotubuleAlignment:
         ):
             raise ValueError("stress_difference_threshold needs velocity_threshold")
 
-    def gate(self) -> tuple[int, float, float]:
+    def get_gate(self) -> tuple[int, float, float]:
         """Returns (gate level, velocity threshold, stress threshold) for the kernel."""
         if self.velocity_threshold is None:
             return 0, 0.0, 0.0
@@ -154,7 +156,7 @@ def update_microtubules(
 
     Args:
         gate_level: 0 no gate, 1 velocity, 2 velocity and stress difference
-            (see `MicrotubuleAlignment.gate`).
+            (see `MicrotubuleAlignment.get_gate`).
     """
     if rate == 0.0:
         return

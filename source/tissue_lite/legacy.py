@@ -119,10 +119,10 @@ def read_model_file(path: Path) -> MeristemModel:
     Raises:
         ValueError: If it uses anything outside the retained subset.
     """
-    return model_from_reactions(parse_reactions(path.read_text()))
+    return build_model(parse_reactions(path.read_text()))
 
 
-def model_from_reactions(reactions: list[Reaction]) -> MeristemModel:
+def build_model(reactions: list[Reaction]) -> MeristemModel:
     """Maps retained Tissue reactions onto a `MeristemModel`."""
     _validate_order([r.name for r in reactions])
     by_name = {r.name: r for r in reactions}

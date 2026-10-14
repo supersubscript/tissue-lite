@@ -9,7 +9,7 @@ from conftest import CASES_DIR, MESHES_DIR
 from tissue_lite.tissue import (
     BACKGROUND,
     Tissue,
-    cell_centroids,
+    compute_cell_centroids,
     format_init,
     parse_init,
 )
@@ -48,7 +48,7 @@ def test_cells_are_sorted_into_closed_loops(path: Path) -> None:
 
 def test_cell_centroids_lie_within_the_mesh() -> None:
     tissue = Tissue.read_init(MESHES_DIR / "patch19.init")
-    centroids = cell_centroids(tissue)
+    centroids = compute_cell_centroids(tissue)
     assert centroids.shape == (19, 3)
     assert (centroids >= tissue.vertices.min(0)).all()
     assert (centroids <= tissue.vertices.max(0)).all()

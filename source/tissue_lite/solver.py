@@ -132,7 +132,7 @@ def integrate(
     t = t_start
 
     def emit() -> None:
-        mechanics = state.cell_mechanics() if state.mechanics_valid else None
+        mechanics = state.get_cell_mechanics() if state.mechanics_valid else None
         frame = Frame(time=t, tissue=tissue.copy(), mechanics=mechanics)
         if writer is not None:
             writer.write(len(frames), frame.tissue)
@@ -140,7 +140,9 @@ def integrate(
 
     while True:
         centres = state.triangulation.centres
-        vd, cd = state.derivatives(tissue.cell_variables, centres, tissue.vertices)
+        vd, cd = state.compute_derivatives(
+            tissue.cell_variables, centres, tissue.vertices
+        )
         scale_v = np.abs(tissue.vertices) + np.abs(vd * h) + tiny
         scale_c = np.abs(centres) + np.abs(cd * h) + tiny
         if do_print and t >= print_time:
@@ -158,7 +160,7 @@ def integrate(
         state.update(h)
         if t >= t_end:
             if do_print:
-                state.derivatives(
+                state.compute_derivatives(
                     tissue.cell_variables, state.triangulation.centres, tissue.vertices
                 )
                 emit()
@@ -221,7 +223,7 @@ def _cash_karp(
     cell_vars = state.tissue.cell_variables
 
     def stage(xs: FloatArray, cs: FloatArray) -> tuple[FloatArray, FloatArray]:
-        return state.derivatives(cell_vars.copy(), cs, xs)
+        return state.compute_derivatives(cell_vars.copy(), cs, xs)
 
     k2x, k2c = stage(x + _B21 * h * k1x, c + _B21 * h * k1c)
     k3x, k3c = stage(

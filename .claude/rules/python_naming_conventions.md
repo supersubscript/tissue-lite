@@ -55,7 +55,7 @@ Use descriptive function prefixes that communicate the operation being performed
 
 ## Variable naming conventions
 
-Images carry their role: `seg_img` for a label image, `seg_path` for its file, `resolution` for (z, y, x) voxel sizes in micrometres. Cell identities are `label`s; `BACKGROUND` (0) is not a cell.
+Mesh indices carry their entity: `cell`, `wall`, `vertex`, `triangle` (`c`, `w`, `v`, `t` inside kernels). `tissue.BACKGROUND` (-1) marks the outside of a boundary wall and is not a cell. Kernels may keep Tissue's and Numerical Recipes' short names (`vd`, `cd`, `h`, `l0`) where they mirror the source.
 
 ```
 # Good: expressive domain names.
@@ -72,12 +72,12 @@ img
 argument_1
 tmp
 
-# Good: dataframe naming indicates type and contained information.
-df_tracking
-df_pair_features
+# Good: array names say what each row holds.
+cell_vars
+wall_lengths
 
-# Bad: dataframe naming is vague and inconsistent.
+# Bad: vague names.
 data
-csv_info
-retrieved_df
+arr
+result_np
 ```
