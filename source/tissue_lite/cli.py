@@ -1,9 +1,9 @@
-"""Command line: a drop-in replacement for Tissue's `simulator` on supported models.
+"""Command line: Tissue's `simulator` arguments on supported models.
 
 `tissue-lite MODEL INIT SOLVER [-init_output FILE] [-vtk_output DIR]` takes the same
-arguments as Tissue, so `TISSUE_BIN=tissue-lite` works with existing run scripts.
-MODEL is a legacy `.model` file or a TOML model; SOLVER is an RK5Adaptive file,
-followed by default (`--solver cash-karp`); the replacement solvers take only its
+arguments as Tissue. MODEL is a legacy `.model` file or a TOML model; SOLVER is an
+RK5Adaptive file. `--solver cash-karp` reproduces Tissue's results (the
+`TISSUE_BIN=tissue-lite` drop-in); the default, quasi-static, uses only the file's
 time span and frame count.
 """
 
@@ -63,15 +63,16 @@ _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
     "--solver",
     "solver_name",
     type=click.Choice(["cash-karp", "quasi-static", "implicit"]),
-    default="cash-karp",
+    default="quasi-static",
     show_default=True,
     help="cash-karp follows SOLVER_FILE as Tissue does; quasi-static and implicit "
-    "(Radau) take feedback steps of --step instead (KNOWN_ISSUES N1–N6).",
+    "(Radau) take only its time span and frame count and feed back every --step "
+    "(KNOWN_ISSUES N1–N6).",
 )
 @click.option(
     "--step",
     type=float,
-    default=1.0,
+    default=0.1,
     show_default=True,
     help="Feedback step of the quasi-static and implicit solvers.",
 )

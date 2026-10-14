@@ -18,7 +18,16 @@ def test_tissue_style_options(tmp_path: Path) -> None:
     out = tmp_path / "final.init"
     vtk = tmp_path / "vtk"
     result = CliRunner().invoke(
-        main, [*_args(case), "-init_output", str(out), "-vtk_output", str(vtk)]
+        main,
+        [
+            *_args(case),
+            "--solver",
+            "cash-karp",
+            "-init_output",
+            str(out),
+            "-vtk_output",
+            str(vtk),
+        ],
     )
     assert result.exit_code == 0, result.output
     assert out.read_text() == (case / "final.init").read_text()
@@ -38,6 +47,8 @@ def test_toml_model(tmp_path: Path) -> None:
             str(toml),
             str(case / "input.init"),
             str(case / "solver.rk5"),
+            "--solver",
+            "cash-karp",
             "--init-output",
             str(out),
             "--vtk-output",

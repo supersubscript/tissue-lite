@@ -31,10 +31,10 @@ uv sync
 
 ## Use
 
-As a drop-in for Tissue's `simulator` (same arguments, so `TISSUE_BIN=tissue-lite` works with flower-experiments' `prerunAndSim.sh`):
+With Tissue's `simulator` arguments (add `--solver cash-karp` to reproduce its results, e.g. through a wrapper script as flower-experiments' `TISSUE_BIN`):
 
 ```bash
-uv run tissue-lite model.model templ.init solver.rk5 -init_output final.init -vtk_output vtk
+uv run tissue-lite --solver cash-karp model.model templ.init solver.rk5 -init_output final.init -vtk_output vtk
 ```
 
 From Python:
@@ -66,9 +66,9 @@ Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or rea
 
 | Solver | Semantics | Select |
 |---|---|---|
-| `solvers.cash_karp.CashKarp` | Tissue's `RK5Adaptive`, bit-exact: feedback after every accepted step, step capped at `max_step` (5e-3 in the project's files) | CLI default, settings from the `.rk5` file; `solver=CashKarp()` |
-| `solvers.quasi_static.QuasiStatic` | One feedback step of `step`, then the mechanical equilibrium of the current feedback state: pseudo-transient Newton on the forces with a coloured finite-difference Jacobian; a rigid drift a partly fixed boundary allows is discarded | `simulate` default; `--solver quasi-static [--step 1.0]` |
-| `solvers.implicit.Implicit` | One feedback step, then Radau (or BDF) over the window, time-accurate without the stiffness-limited step | `--solver implicit`; `Implicit(method="BDF")` |
+| `solvers.cash_karp.CashKarp` | Tissue's `RK5Adaptive`, bit-exact: feedback after every accepted step, step capped at `max_step` (5e-3 in the project's files) | `--solver cash-karp` (settings from the `.rk5` file); `solver=CashKarp()` |
+| `solvers.quasi_static.QuasiStatic` | One feedback step of `step`, then the mechanical equilibrium of the current feedback state: pseudo-transient Newton on the forces with a coloured finite-difference Jacobian; a rigid drift a partly fixed boundary allows is discarded | `simulate` and CLI default; `--step 0.1` |
+| `solvers.implicit.Implicit` | One feedback step, then Radau (or BDF) over the window, time-accurate without the stiffness-limited step | `--solver implicit [--step 0.1]`; `Implicit(method="BDF")` |
 
 The replacement solvers change the feedback semantics (KNOWN_ISSUES N1–N6); the regression data covers Cash–Karp only.
 

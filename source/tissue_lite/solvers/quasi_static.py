@@ -5,7 +5,7 @@ microtubules, growth, pressure ramp), then moves the free positions to where the
 forces vanish. A boundary that leaves rigid motions free (`Boundary.fixed_axes`
 shorter than all three axes) lets the pressure on a non-planar edge drive a rigid
 drift that no position removes; equilibrium is then up to that drift, which is
-discarded (KNOWN_ISSUES N1).
+discarded (KNOWN_ISSUES N2).
 
 The equilibrium comes from pseudo-transient continuation (Kelley & Keyes, SIAM J.
 Numer. Anal. 35, 1998): implicit Euler steps of pseudo-time τ on the overdamped
@@ -54,7 +54,7 @@ class QuasiStatic:
         ValueError: If a setting is not positive.
     """
 
-    step: float = 1.0
+    step: float = 0.1
     force_tolerance: float = 1e-6
     max_iterations: int = 500
 
@@ -151,8 +151,7 @@ class QuasiStaticRun:
 
         Translation along an axis the boundary does not fix, and rotation about an
         axis (through the centroid) when it fixes no other axis; m is 0 for a fully
-        fixed boundary. The fibres break the rotational symmetry of the forces, so a
-        rotation is a drift mode by the boundary alone (KNOWN_ISSUES N1).
+        fixed boundary (KNOWN_ISSUES N2).
         """
         self._trial.ravel()[self.free] = y
         positions = self._trial
@@ -163,6 +162,8 @@ class QuasiStaticRun:
             mode[:, axis] = 1.0
             modes.append(mode)
         centred = positions - positions.mean(axis=0)
+        # The boundary alone decides: the fibres stay fixed in space, so with fibre
+        # stiffness a torque that a relative rotation could balance is discarded too.
         for axis in range(3):
             if not fixed_axes[np.arange(3) != axis].any():
                 modes.append(np.cross(np.eye(3)[axis], centred))

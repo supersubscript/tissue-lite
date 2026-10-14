@@ -22,7 +22,7 @@ from tissue_lite.solvers.stepper import StepResult
 class Implicit:
     """scipy's `solve_ivp`, stiff method, over feedback windows of length `step`."""
 
-    step: float = 1.0
+    step: float = 0.1
     method: Literal["Radau", "BDF"] = "Radau"
     rtol: float = 1e-6
     atol: float = 1e-9

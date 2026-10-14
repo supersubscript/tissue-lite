@@ -10,7 +10,7 @@ from tissue_lite.solvers.simulate import integrate, simulate
 
 def test_step_reaches_equilibrium_on_a_fixed_boundary() -> None:
     state = case_state(CASES_DIR / "aniso")
-    run = QuasiStatic(force_tolerance=1e-8).start(state)
+    run = QuasiStatic(step=1.0, force_tolerance=1e-8).start(state)
     result = run.step(0.0, 1.0, state.compute_forces())
     assert result.t == 1.0 and result.accepted
     assert state.pressure_factor == 1.0
@@ -53,7 +53,7 @@ def test_frames_follow_the_schedule() -> None:
         read_case_tissue(case),
         t_end=3.0,
         n_frames=4,
-        solver=QuasiStatic(),
+        solver=QuasiStatic(step=1.0),
     )
     np.testing.assert_allclose(result.times, [0.0, 1.0, 2.0, 3.0, 3.0])
     assert result.accepted_steps == 4  # three feedback steps and the S6 sliver to t_end
