@@ -232,6 +232,18 @@ class ModelState:
             )
         return derivatives
 
+    def compute_trial_forces(self, positions: FloatArray) -> FloatArray:
+        """`compute_forces_at` as a pure function of `positions`.
+
+        The diagnostics go to a scratch copy of the cell state and the random
+        fibre fallback (KNOWN_ISSUES T1) restarts from the current seed, so the
+        state is left untouched.
+        """
+        rand_state = self.rand_state.copy()
+        derivatives = self.compute_forces_at(self.tissue.cells.copy(), positions)
+        self.rand_state[:] = rand_state
+        return derivatives
+
     def update(self, h: float) -> None:
         """Applies the per-step updates of length h in Tissue's order.
 

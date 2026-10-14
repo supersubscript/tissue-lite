@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.2,<9",
     "numba>=0.63,<1",
     "numpy>=2.3,<3",
+    "scipy>=1.18.1",
 ]
 
 [project.scripts]
@@ -49,6 +50,7 @@ extend-immutable-calls = [
     "tissue_lite.legacy.slots.SlotLayout",
     "tissue_lite.material.Boundary",
     "tissue_lite.solvers.cash_karp.CashKarp",
+    "tissue_lite.solvers.quasi_static.QuasiStatic",
 ]
 
 [tool.ty.environment]
