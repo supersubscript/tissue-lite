@@ -1,5 +1,6 @@
 """Tests for the VTU/PVD writer against Tissue's own files."""
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,8 @@ from conftest import CASES, CASES_DIR, CaseRunner
 from tissue_lite.legacy import read_solver_file
 from tissue_lite.output import format_pvd
 
+_NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?|[-+]?(inf|nan)")
+
 
 def _tokens_close(actual: str, expected: str) -> None:
     """Compares files token by token; numbers within %g rounding."""
@@ -16,12 +19,11 @@ def _tokens_close(actual: str, expected: str) -> None:
     assert len(a) == len(e)
     numeric_a, numeric_e = [], []
     for x, y in zip(a, e, strict=True):
-        try:
+        if _NUMBER.fullmatch(y):
+            numeric_a.append(float(x))
             numeric_e.append(float(y))
-        except ValueError:
+        else:
             assert x == y
-            continue
-        numeric_a.append(float(x))
     np.testing.assert_allclose(numeric_a, numeric_e, rtol=1e-5, atol=1e-12)
 
 

@@ -74,7 +74,7 @@ class SolverFile:
     print_flag: int
 
 
-def _tokens(text: str) -> list[str]:
+def _split_tokens(text: str) -> list[str]:
     """Splits a Tissue file into tokens, dropping `#` comments."""
     return [tok for line in text.splitlines() for tok in line.split("#")[0].split()]
 
@@ -85,7 +85,7 @@ def parse_reactions(text: str) -> list[Reaction]:
     Raises:
         ValueError: If the file has compartment changes or unknown directions.
     """
-    tokens = _tokens(text)
+    tokens = _split_tokens(text)
     pos = 0
 
     def take() -> str:
@@ -124,39 +124,43 @@ def read_model_file(path: Path) -> MeristemModel:
 
 def model_from_reactions(reactions: list[Reaction]) -> MeristemModel:
     """Maps retained Tissue reactions onto a `MeristemModel`."""
-    _check_order([r.name for r in reactions])
+    _validate_order([r.name for r in reactions])
     by_name = {r.name: r for r in reactions}
     trbs = by_name["VertexFromTRBScenterTriangulationMT"]
-    membrane, model_layout, com = _membrane(trbs)
+    membrane, model_layout, com = _parse_membrane(trbs)
     initiate = by_name["CenterTriangulation::Initiate"]
     double = len(initiate.parameters) == 2 and initiate.parameters[1] == 1
     if double != membrane.double_rest_lengths:
         raise ValueError("Initiate double-edge flag and TRBS p10 disagree")
     if initiate.indices != [[com]]:
         raise ValueError("Initiate and TRBS centre indices disagree")
-    _expect_angles([r for r in reactions if r.name == "CalculateAngleVectors"])
+    _validate_angles([r for r in reactions if r.name == "CalculateAngleVectors"])
     volume = [1, layout.VOLUME_CHANGE, 2, layout.VOLUME_CHANGE, 3, layout.VOLUME_CHANGE]
     if by_name["TemplateVolumeChange"].indices != [volume]:
         raise ValueError("TemplateVolumeChange must store into cells 1-3, slot 25")
     return MeristemModel(
         membrane=membrane,
-        pressure=_pressure(by_name["Pressure3D::CenterTriangulation::Linear"], com),
-        boundary=_boundary(by_name["VertexNoUpdateBoundary"]),
-        fibres=_fibres(by_name["FiberModel"], membrane)
+        pressure=_parse_pressure(
+            by_name["Pressure3D::CenterTriangulation::Linear"], com
+        ),
+        boundary=_parse_boundary(by_name["VertexNoUpdateBoundary"]),
+        fibres=_parse_fibres(by_name["FiberModel"], membrane)
         if "FiberModel" in by_name
         else None,
-        microtubules=_microtubules(by_name["UpdateMTDirectionEquilibrium"])
+        microtubules=_parse_microtubules(by_name["UpdateMTDirectionEquilibrium"])
         if "UpdateMTDirectionEquilibrium" in by_name
         else None,
-        growth=_growth(by_name["CenterTriangulation::WallGrowth::StrainTRBS"], com)
+        growth=_parse_growth(
+            by_name["CenterTriangulation::WallGrowth::StrainTRBS"], com
+        )
         if "CenterTriangulation::WallGrowth::StrainTRBS" in by_name
         else None,
-        track_velocity=_velocity(by_name.get("Calculate::VertexVelocity")),
+        track_velocity=_has_velocity(by_name.get("Calculate::VertexVelocity")),
         layout=model_layout,
     )
 
 
-def _check_order(names: list[str]) -> None:
+def _validate_order(names: list[str]) -> None:
     """Checks the reactions are a supported subsequence of the canonical order."""
     unknown = set(names) - set(_CANONICAL_ORDER)
     if unknown:
@@ -171,7 +175,7 @@ def _check_order(names: list[str]) -> None:
         raise ValueError(f"Reactions are not in the supported order: {names}")
 
 
-def _membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
+def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
     """Returns the membrane, the output layout and the centre index."""
     p = r.parameters
     if len(p) not in (11, 13):
@@ -213,7 +217,8 @@ def _membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
     return membrane, model_layout, r.indices[1][0]
 
 
-def _pressure(r: Reaction, com: int) -> Pressure:
+def _parse_pressure(r: Reaction, com: int) -> Pressure:
+    """Validates the pressure reaction against the TRBS centre index."""
     p = r.parameters
     if len(p) != 3 or p[1] != 1:
         raise ValueError("Pressure needs three parameters with area flag 1")
@@ -222,13 +227,15 @@ def _pressure(r: Reaction, com: int) -> Pressure:
     return Pressure(pressure=p[0], ramp_time=p[2])
 
 
-def _boundary(r: Reaction) -> Boundary:
+def _parse_boundary(r: Reaction) -> Boundary:
+    """Returns the fixed axes (all three when the reaction has no indices)."""
     if not r.indices:
         return Boundary()
     return Boundary(fixed_axes=tuple(r.indices[0]))
 
 
-def _fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
+def _parse_fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
+    """Maps FiberModel, keeping its own moduli when they differ from TRBS."""
     p = r.parameters
     if len(p) != 8:
         raise ValueError("FiberModel needs eight parameters")
@@ -255,7 +262,8 @@ def _fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
     )
 
 
-def _microtubules(r: Reaction) -> MicrotubuleAlignment:
+def _parse_microtubules(r: Reaction) -> MicrotubuleAlignment:
+    """Maps UpdateMTDirectionEquilibrium; absent parameters disable its gates."""
     p = r.parameters
     expected = [
         [layout.STRESS_START],
@@ -274,17 +282,19 @@ def _microtubules(r: Reaction) -> MicrotubuleAlignment:
     )
 
 
-def _growth(r: Reaction, com: int) -> StrainGrowth:
+def _parse_growth(r: Reaction, com: int) -> StrainGrowth:
+    """Maps StrainTRBS growth; its velocity threshold is unused, as in Tissue."""
     p = r.parameters
     if len(p) != 4 or p[3] != 1:
         raise ValueError("StrainTRBS growth needs four parameters with p3=1")
     if r.indices != [[0], [com], [layout.VELOCITY]]:
         raise ValueError("StrainTRBS indices must be [0], [centre], [22]")
-    logger.info("StrainTRBS velocity threshold %g is unused, as in Tissue", p[2])
+    logger.debug("StrainTRBS velocity threshold %g is unused, as in Tissue", p[2])
     return StrainGrowth(rate=p[0], threshold=p[1])
 
 
-def _velocity(r: Reaction | None) -> bool:
+def _has_velocity(r: Reaction | None) -> bool:
+    """Whether the model tracks vertex velocity (in slot 22 only)."""
     if r is None:
         return False
     if r.indices != [[layout.VELOCITY]]:
@@ -292,7 +302,8 @@ def _velocity(r: Reaction | None) -> bool:
     return True
 
 
-def _expect_angles(angles: list[Reaction]) -> None:
+def _validate_angles(angles: list[Reaction]) -> None:
+    """Checks both CalculateAngleVectors use the standard slots."""
     expected = [
         [[layout.MICROTUBULE_START, layout.STRESS_START], [layout.ANGLE_MT_STRESS]],
         [[layout.STRESS_START, layout.STRAIN_START], [layout.ANGLE_STRESS_STRAIN]],
@@ -307,7 +318,7 @@ def read_solver_file(path: Path) -> SolverFile:
     Raises:
         ValueError: If it names another solver.
     """
-    tokens = _tokens(path.read_text())
+    tokens = _split_tokens(path.read_text())
     if not tokens or tokens[0] != "RK5Adaptive":
         raise ValueError("Only RK5Adaptive solver files are supported")
     t_start, t_end, flag, n_print, h1, eps = tokens[1:7]

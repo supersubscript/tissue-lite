@@ -11,17 +11,17 @@ flower-experiments (`--models`), so the tests do not need that repository.
 import hashlib
 import json
 import logging
-import os
 import platform
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import click
 import numpy as np
+from cut_patch import resize_cell_variables
 
 from tissue_lite.tissue import Tissue
 
@@ -44,10 +44,7 @@ class Case:
         model: Model file, relative to flower-experiments.
         init: A mesh name in `tests/data/meshes/` or `case:<name>` for another
             case's final state (as `prerunAndSim.sh` chains runs).
-        t_end: End time.
-        n_frames: Printed frames.
         n_vars: Cell variables to pad or truncate the init to.
-        tolerance: Solver tolerance.
         concentration: Sets cell variable 41 to a ramp over the cells (MF=10).
         edits: (old, new) replacements applied once each to the model text.
         description: What the case covers.
@@ -64,7 +61,7 @@ class Case:
     concentration: bool = False
     edits: tuple[tuple[str, str], ...] = ()
     description: str = ""
-    tags: tuple[str, ...] = field(default_factory=tuple)
+    tags: tuple[str, ...] = ()
 
 
 ZFIX = "results/zfix_rerun"
@@ -179,30 +176,28 @@ CASES = (
 )
 
 
-def sha256(path: Path) -> str:
+def compute_sha256(path: Path) -> str:
     """Returns the file's SHA-256 hex digest."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def solver_text(case: Case) -> str:
+def make_solver_text(case: Case) -> str:
     """Returns the RK5Adaptive solver file for the case (print flag 2, VTU)."""
     return (
         f"RK5Adaptive\n0 {case.t_end:g}\n2 {case.n_frames}\n5.0e-3 {case.tolerance:g}\n"
     )
 
 
-def prepare_init(case: Case) -> Tissue:
+def make_input_tissue(case: Case) -> Tissue:
     """Loads the case's input state and adapts it to the model's variable count."""
     if case.init.startswith("case:"):
         tissue = Tissue.read_init(CASES_DIR / case.init[5:] / "final.init")
     else:
         tissue = Tissue.read_init(MESHES_DIR / f"{case.init}.init")
-    v = tissue.cell_variables
-    padded = np.zeros((len(v), case.n_vars))
-    padded[:, : min(case.n_vars, v.shape[1])] = v[:, : case.n_vars]
+    tissue.cell_variables = resize_cell_variables(tissue.cell_variables, case.n_vars)
     if case.concentration:
-        padded[:, CONCENTRATION_INDEX] = np.linspace(0.0, 1.0, len(v))
-    tissue.cell_variables = padded
+        ramp = np.linspace(0.0, 1.0, len(tissue.cell_variables))
+        tissue.cell_variables[:, CONCENTRATION_INDEX] = ramp
     return tissue.without_triangulation()
 
 
@@ -218,8 +213,8 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
             raise ValueError(f"{case.name}: {old!r} not in {case.model}")
         text = text.replace(old, new, 1)
     (out / "model.model").write_text(text)
-    (out / "solver.rk5").write_text(solver_text(case))
-    prepare_init(case).write_init(out / "input.init")
+    (out / "solver.rk5").write_text(make_solver_text(case))
+    make_input_tissue(case).write_init(out / "input.init")
     command = [
         str(simulator),
         "model.model",
@@ -241,7 +236,7 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
         "tags": list(case.tags),
         "tissue_commit": TISSUE_COMMIT,
         "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
-        "compiler": compiler_version(),
+        "compiler": get_compiler_version(),
         "compiler_flags": TISSUE_FLAGS,
         "platform": platform.platform(),
         "command": " ".join(["simulator", *command[1:]]),
@@ -251,7 +246,7 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
         "n_vars": case.n_vars,
         "concentration_ramp_index": CONCENTRATION_INDEX if case.concentration else None,
         "sha256": {
-            name: sha256(out / name)
+            name: compute_sha256(out / name)
             for name in ("model.model", "solver.rk5", "input.init", "final.init")
         },
         "generated": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -260,7 +255,7 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
     logger.info("Wrote %s", out)
 
 
-def compiler_version() -> str:
+def get_compiler_version() -> str:
     """Returns the first line of `g++ --version`."""
     proc = subprocess.run(["g++", "--version"], capture_output=True, text=True)
     return proc.stdout.splitlines()[0] if proc.returncode == 0 else "unknown"
@@ -270,9 +265,7 @@ def compiler_version() -> str:
 @click.option(
     "--simulator",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=lambda: os.environ.get(
-        "TISSUE_REFERENCE_BIN", "reference/build/bin/simulator"
-    ),
+    default=ROOT / "reference" / "build" / "bin" / "simulator",
     help="Tissue simulator built at the reference commit.",
 )
 @click.option(

@@ -136,6 +136,9 @@ class Triangles:
         )
 
 
+type MaterialArgs = tuple[float, float, float, float, bool, bool, int, float, float]
+
+
 @dataclass(frozen=True)
 class MaterialParameters:
     """Scalar parameters of the TRBS kernels, flattened for Numba."""
@@ -166,9 +169,7 @@ class MaterialParameters:
             n_hill=0.0 if s is None else s.n_hill,
         )
 
-    def as_tuple(
-        self,
-    ) -> tuple[float, float, float, float, bool, bool, int, float, float]:
+    def as_tuple(self) -> MaterialArgs:
         """Returns the fields in kernel-argument order."""
         return astuple(self)
 

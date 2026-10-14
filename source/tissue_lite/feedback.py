@@ -75,7 +75,7 @@ class MicrotubuleAlignment:
 
 
 @numba.njit(cache=True)
-def _hill_fraction(a: float, k: float, n: float) -> float:
+def _hill_fraction(a: float | FloatArray, k: float, n: float) -> float | FloatArray:
     """Returns Tissue's `a^n / ((1 - a)^n k^n + a^n)`."""
     return a**n / ((1 - a) ** n * k**n + a**n)
 
@@ -91,16 +91,16 @@ def initiate_fibres(
         cell_vars[:, layout.STRESS_ANISOTROPY] = 0
         cell_vars[:, layout.YOUNG_LONGITUDINAL] = young_matrix + 0.5 * young_fibre
     elif fibres.initialise == "anisotropic":
-        for c in range(len(cell_vars)):
-            a = float(cell_vars[c, layout.STRESS_ANISOTROPY])
-            f = (
-                a
-                if fibres.coupling == "linear"
-                else _hill_fraction(a, fibres.k_hill, fibres.n_hill)
-            )
-            cell_vars[c, layout.YOUNG_LONGITUDINAL] = (
-                young_matrix + 0.5 * (1 + f) * young_fibre
-            )
+        a = cell_vars[:, layout.STRESS_ANISOTROPY]
+        f = (
+            a
+            if fibres.coupling == "linear"
+            # The Numba kernel keeps libm pow; numpy's power can differ in the last bit.
+            else _hill_fraction(a, fibres.k_hill, fibres.n_hill)
+        )
+        cell_vars[:, layout.YOUNG_LONGITUDINAL] = (
+            young_matrix + 0.5 * (1 + f) * young_fibre
+        )
 
 
 @numba.njit(cache=True)
@@ -152,7 +152,9 @@ def update_microtubules(
 ) -> None:
     """Applies one explicit microtubule update of length h.
 
-    gate_level: 0 no gate, 1 velocity, 2 velocity and stress difference.
+    Args:
+        gate_level: 0 no gate, 1 velocity, 2 velocity and stress difference
+            (see `MicrotubuleAlignment.gate`).
     """
     if rate == 0.0:
         return

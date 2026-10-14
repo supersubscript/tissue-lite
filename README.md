@@ -2,7 +2,7 @@
 
 A minimal Python reimplementation of the [Tissue](https://gitlab.com/slcu/teamHJ/tissue) vertex simulator, limited to what the meristem mechanics work uses: the flower-experiments models and the dome-shape results of Paper IV (thesis Fig. 5.4).
 
-It reproduces Tissue e74e457 **bit for bit** on every regression case, including the full 963-cell paraboloid, and keeps Tissue's quirks; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). On that mesh a run is about 1.4× faster than Tissue (Numba kernels, one core).
+It reproduces Tissue e74e457 **bit for bit** on every regression case and on the full 963-cell paraboloid (x86-64, glibc 2.39; the tests allow rtol 1e-9 for other libm versions), and keeps Tissue's quirks; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). On that mesh a run is about 1.4× faster than Tissue (Numba kernels, one core).
 
 ## Scope
 

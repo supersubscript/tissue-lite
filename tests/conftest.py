@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from _pytest.mark import ParameterSet  # public pytest.param return type
 
 from tissue_lite.legacy import read_model_file, read_solver_file
 from tissue_lite.model import ModelState
@@ -22,7 +23,8 @@ RTOL = 1e-9
 ATOL = 1e-12
 
 
-def _case_param(path: Path) -> object:
+def _case_param(path: Path) -> ParameterSet:
+    """Returns the case as a pytest param, marked slow if its provenance says so."""
     tags = json.loads((path / "provenance.json").read_text())["tags"]
     marks = [pytest.mark.slow] if "slow" in tags else []
     return pytest.param(path, id=path.name, marks=marks)

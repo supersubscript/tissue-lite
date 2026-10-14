@@ -66,7 +66,7 @@ class Frame:
     mechanics: CellMechanics | None
 
 
-@dataclass
+@dataclass(frozen=True)
 class SimulationResult:
     """Printed frames and step statistics of one run; `final` is the end state."""
 
@@ -132,8 +132,8 @@ def integrate(
     t = t_start
 
     def emit() -> None:
-        mech = state.cell_mechanics() if state.mechanics_valid else None
-        frame = Frame(time=t, tissue=tissue.copy(), mechanics=mech)
+        mechanics = state.cell_mechanics() if state.mechanics_valid else None
+        frame = Frame(time=t, tissue=tissue.copy(), mechanics=mechanics)
         if writer is not None:
             writer.write(len(frames), frame.tissue)
         frames.append(frame)

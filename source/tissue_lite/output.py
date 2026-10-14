@@ -20,17 +20,18 @@ _TRIANGLE = 5
 _QUAD = 7  # Tissue writes VTK_POLYGON (7), not VTK_QUAD (9), for walls
 
 
-def _g(value: float) -> str:
+def _format_g(value: float) -> str:
     """Formats a float as a default C++ ostream does."""
     return f"{value:g}"
 
 
 def _row(values: FloatArray) -> str:
     """Formats values space-separated with a trailing space, as Tissue does."""
-    return "".join(f"{_g(x)} " for x in values)
+    return "".join(f"{_format_g(x)} " for x in values)
 
 
 def _piece_header(n_points: int, n_cells: int) -> str:
+    """Returns Tissue's <Piece> line, counts right-aligned to width 8."""
     return f'<Piece  NumberOfPoints="{n_points:>8}" NumberOfCells="{n_cells:>8}">\n'
 
 
@@ -53,7 +54,7 @@ def format_cells(tissue: Tissue) -> str:
     out.append(
         '<Points>\n<DataArray type="Float64" NumberOfComponents="3" format="ascii">\n'
     )
-    out += [f"{_g(a)} {_g(b)} {_g(c)}\n" for a, b, c in points]
+    out += [f"{_format_g(a)} {_format_g(b)} {_format_g(c)}\n" for a, b, c in points]
     out.append("</DataArray>\n</Points>\n")
     out.append('<Cells>\n<DataArray type="Int32" Name="connectivity" format="ascii">\n')
     count = 0
@@ -71,7 +72,7 @@ def format_cells(tissue: Tissue) -> str:
         '<DataArray type="Float64" NumberOfComponents="3" Name="cell vector" '
         'format="ascii">\n'
     )
-    out += [f"{_g(a)} {_g(b)} {_g(c)}\n" for a, b, c in v[:, :3]]
+    out += [f"{_format_g(a)} {_format_g(b)} {_format_g(c)}\n" for a, b, c in v[:, :3]]
     out.append("</DataArray>\n")
     out.append('<DataArray type="Float64" Name="cell vector length" format="ascii">\n')
     out.append(_row(v[:, 3]) + "\n</DataArray>\n")
@@ -93,8 +94,14 @@ def format_walls(tissue: Tissue) -> str:
     out.append(
         '<Points>\n<DataArray type="Float64" NumberOfComponents="3" format="ascii">\n'
     )
-    out += [f"{_g(a)} {_g(b)} {_g(c)} \n" for a, b, c in tissue.vertices]
-    out += [f"{_g(a)} {_g(b)} {_g(c)}\n" for a, b, c in _shrunk_points(tissue)]
+    out += [
+        f"{_format_g(a)} {_format_g(b)} {_format_g(c)} \n"
+        for a, b, c in tissue.vertices
+    ]
+    out += [
+        f"{_format_g(a)} {_format_g(b)} {_format_g(c)}\n"
+        for a, b, c in _shrunk_points(tissue)
+    ]
     out.append("</DataArray>\n</Points>\n")
     out.append('<Cells>\n<DataArray type="Int32" Name="connectivity" format="ascii">\n')
     parts = []

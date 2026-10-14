@@ -39,17 +39,14 @@ class Topology:
 
     @property
     def num_cells(self) -> int:
-        """Number of cells."""
         return len(self.offsets) - 1
 
     @property
     def num_vertices(self) -> int:
-        """Number of vertices."""
         return len(self.boundary)
 
     @property
     def num_walls(self) -> int:
-        """Number of walls."""
         return len(self.wall_cells)
 
     @property
@@ -289,8 +286,8 @@ def _sort_cell(
     """Port of `Cell::sortWallAndVertex`; keeps neighbour orientations consistent."""
     walls = cell_walls[cell]
     n = len(walls)
-    tmp_wall = [-1] * n
-    tmp_vert = [-1] * n
+    sorted_walls = [-1] * n
+    sorted_verts = [-1] * n
 
     def side(w: int) -> int:
         if wc[w][0] == cell:
@@ -303,8 +300,8 @@ def _sort_cell(
     if found is None:
         wall_index = wall_start = vertex_index = 0
         w = walls[0]
-        tmp_wall[0] = w
-        tmp_vert[0], tmp_vert[1] = wv[w]
+        sorted_walls[0] = w
+        sorted_verts[0], sorted_verts[1] = wv[w]
         vertex_index = 1
         s = side(w)
         cell_sort[w, s] = 1
@@ -313,66 +310,61 @@ def _sort_cell(
     else:
         wall_index = wall_start = vertex_index = found
         w = walls[found]
-        tmp_wall[found] = w
+        sorted_walls[found] = w
         flag = cell_sort[w, side(w)]
         if flag == 0:
             raise ValueError(f"Wall {w} marked as sorted but is not")
         first, second = wv[w] if flag == 1 else wv[w][::-1]
-        tmp_vert[vertex_index] = first
+        sorted_verts[vertex_index] = first
         vertex_index = (vertex_index + 1) % n
-        tmp_vert[vertex_index] = second
+        sorted_verts[vertex_index] = second
 
     while wall_index < wall_start + n - 1:
         for w in walls:
-            current = tmp_vert[vertex_index]
-            if w == tmp_wall[wall_index % n] or current not in wv[w]:
+            current = sorted_verts[vertex_index]
+            if w == sorted_walls[wall_index % n] or current not in wv[w]:
                 continue
             wall_index += 1
-            tmp_wall[wall_index % n] = w
+            sorted_walls[wall_index % n] = w
             v1, v2 = wv[w]
             vertex_index = (vertex_index + 1) % n
             if wall_index < wall_start + n - 1:
-                tmp_vert[vertex_index] = v2 if current == v1 else v1
+                sorted_verts[vertex_index] = v2 if current == v1 else v1
             s = side(w)
             flag = cell_sort[w, s]
-            if flag == 1 and v2 != tmp_vert[vertex_index]:
+            if flag == 1 and v2 != sorted_verts[vertex_index]:
                 raise ValueError(f"Inconsistent orientation of wall {w}")
-            if flag == -1 and v1 != tmp_vert[vertex_index]:
+            if flag == -1 and v1 != sorted_verts[vertex_index]:
                 raise ValueError(f"Inconsistent orientation of wall {w}")
             if flag == 0:
-                if v2 == tmp_vert[vertex_index]:
+                if v2 == sorted_verts[vertex_index]:
                     cell_sort[w, s] = 1
                     if wc[w][1 - s] != BACKGROUND:
                         cell_sort[w, 1 - s] = -1
-                elif v1 == tmp_vert[vertex_index]:
+                elif v1 == sorted_verts[vertex_index]:
                     cell_sort[w, s] = -1
                     if wc[w][1 - s] != BACKGROUND:
                         cell_sort[w, 1 - s] = 1
                 else:
                     raise ValueError(f"Vertex not in sorted wall {w}")
             break
-    if -1 in tmp_wall or -1 in tmp_vert:
+    if -1 in sorted_walls or -1 in sorted_verts:
         raise ValueError(f"Cell {cell} could not be sorted")
-    cell_walls[cell] = tmp_wall
-    cell_verts[cell] = tmp_vert
+    cell_walls[cell] = sorted_walls
+    cell_verts[cell] = sorted_verts
 
 
 def cell_centroids(tissue: Tissue) -> FloatArray:
     """Returns Tissue's `positionFromVertex`: wall midpoints weighted by wall length."""
     topo = tissue.topology
-    x = tissue.vertices
-    centres = np.empty((topo.num_cells, 3))
-    for c in range(topo.num_cells):
-        pos = [0.0, 0.0, 0.0]
-        total = 0.0
-        for w in topo.cell_walls[topo.offsets[c] : topo.offsets[c + 1]]:
-            a, b = topo.wall_vertices[w]
-            length = 0.0
-            for d in range(3):
-                length += (x[a, d] - x[b, d]) * (x[a, d] - x[b, d])
-            length = float(np.sqrt(length))
-            total += length
-            for d in range(3):
-                pos[d] += 0.5 * (x[a, d] + x[b, d]) * length
-        centres[c] = [p / total for p in pos]
-    return centres
+    ends = tissue.vertices[topo.wall_vertices[topo.cell_walls]]  # (sum N, 2, 3)
+    diff = ends[:, 0] - ends[:, 1]
+    # Explicit sums and bincount keep Tissue's sequential summation order.
+    length = np.sqrt(
+        diff[:, 0] * diff[:, 0] + diff[:, 1] * diff[:, 1] + diff[:, 2] * diff[:, 2]
+    )
+    weighted = 0.5 * (ends[:, 0] + ends[:, 1]) * length[:, None]
+    cells, n = topo.triangle_cells, topo.num_cells
+    total = np.bincount(cells, weights=length, minlength=n)
+    sums = [np.bincount(cells, weights=weighted[:, d], minlength=n) for d in range(3)]
+    return np.column_stack(sums) / total[:, None]

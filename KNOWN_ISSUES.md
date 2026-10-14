@@ -1,6 +1,6 @@
 # Known issues
 
-tissue-lite reproduces Tissue e74e457 as-is, so every item below is **kept on purpose**: the regression suite fails if one is "fixed". Each is logged here for a later, deliberate fix. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`); ✔ marks items confirmed by the regression data, the others come from code reading.
+tissue-lite reproduces Tissue e74e457 as-is, so every item below is **kept on purpose** and logged for a later, deliberate fix. ✔ marks items exercised by the regression data (fixing one fails the suite); the others come from code reading. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`).
 
 ## Solver (`solver.py`, Tissue `rungeKutta.cc`)
 

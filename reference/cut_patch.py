@@ -13,7 +13,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tissue_lite.tissue import BACKGROUND, Tissue, build_topology, cell_centroids
+from tissue_lite.tissue import (
+    BACKGROUND,
+    FloatArray,
+    Tissue,
+    build_topology,
+    cell_centroids,
+)
 
 
 def cut_patch(tissue: Tissue, n_cells: int) -> Tissue:
@@ -59,15 +65,21 @@ def cut_patch(tissue: Tissue, n_cells: int) -> Tissue:
     )
 
 
+def resize_cell_variables(cell_vars: FloatArray, n_vars: int) -> FloatArray:
+    """Returns the cell variables padded with zeros or truncated to n_vars columns."""
+    resized = np.zeros((len(cell_vars), n_vars))
+    resized[:, : min(n_vars, cell_vars.shape[1])] = cell_vars[:, :n_vars]
+    return resized
+
+
 def main() -> None:
+    """Cuts the patch given on the command line (see the module docstring)."""
     mesh, n_cells, out = Path(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3])
     patch = cut_patch(Tissue.read_init(mesh), n_cells)
     if len(sys.argv) > 4:
-        n_vars = int(sys.argv[4])
-        v = patch.cell_variables
-        padded = np.zeros((len(v), n_vars))
-        padded[:, : min(n_vars, v.shape[1])] = v[:, :n_vars]
-        patch.cell_variables = padded
+        patch.cell_variables = resize_cell_variables(
+            patch.cell_variables, int(sys.argv[4])
+        )
     patch.write_init(out)
 
 

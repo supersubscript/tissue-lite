@@ -26,6 +26,7 @@ from tissue_lite.mechanics import (
     Boundary,
     CellMechanics,
     ConcentrationSoftening,
+    MaterialArgs,
     MaterialParameters,
     Pressure,
     TRBSMembrane,
@@ -43,6 +44,9 @@ from tissue_lite.tissue import (
 logger = logging.getLogger(__name__)
 
 type Layout = Literal["sweep", "growth"]
+type TomlValue = (
+    bool | int | float | str | None | tuple[TomlValue, ...] | dict[str, TomlValue]
+)
 
 
 @dataclass(frozen=True)
@@ -71,22 +75,22 @@ class MeristemModel:
     @classmethod
     def from_toml(cls, path: Path) -> MeristemModel:
         """Reads a model written by `to_toml`."""
-        data = tomllib.loads(path.read_text())
-        membrane = dict(data["membrane"])
+        tables = tomllib.loads(path.read_text())
+        membrane = dict(tables["membrane"])
         if "softening" in membrane:
             membrane["softening"] = ConcentrationSoftening(**membrane["softening"])
-        boundary = data.get("boundary", {})
+        boundary = tables.get("boundary", {})
         return cls(
             membrane=TRBSMembrane(**membrane),
-            pressure=Pressure(**data["pressure"]),
+            pressure=Pressure(**tables["pressure"]),
             boundary=Boundary(fixed_axes=tuple(boundary.get("fixed_axes", (0, 1, 2)))),
-            fibres=FibreStiffness(**data["fibres"]) if "fibres" in data else None,
-            microtubules=MicrotubuleAlignment(**data["microtubules"])
-            if "microtubules" in data
+            fibres=FibreStiffness(**tables["fibres"]) if "fibres" in tables else None,
+            microtubules=MicrotubuleAlignment(**tables["microtubules"])
+            if "microtubules" in tables
             else None,
-            growth=StrainGrowth(**data["growth"]) if "growth" in data else None,
-            track_velocity=data.get("track_velocity", True),
-            layout=data.get("layout", "sweep"),
+            growth=StrainGrowth(**tables["growth"]) if "growth" in tables else None,
+            track_velocity=tables.get("track_velocity", True),
+            layout=tables.get("layout", "sweep"),
         )
 
     def to_toml(self, path: Path) -> None:
@@ -94,12 +98,12 @@ class MeristemModel:
         path.write_text(_format_toml(asdict(self)))
 
 
-def _format_toml(data: dict[str, object]) -> str:
+def _format_toml(tables: dict[str, TomlValue]) -> str:
     """Formats a nested dict of scalars, tuples and dicts as TOML."""
-    return "\n".join(_toml_table(None, data)) + "\n"
+    return "\n".join(_toml_table(None, tables)) + "\n"
 
 
-def _toml_table(name: str | None, table: dict[str, object]) -> list[str]:
+def _toml_table(name: str | None, table: dict[str, TomlValue]) -> list[str]:
     """Returns the lines of a TOML table (the root if name is None) and subtables."""
     lines = [] if name is None else ["", f"[{name}]"]
     lines += [
@@ -113,7 +117,7 @@ def _toml_table(name: str | None, table: dict[str, object]) -> list[str]:
     return lines
 
 
-def _toml_value(value: object) -> str:
+def _toml_value(value: TomlValue) -> str:
     """Formats one TOML scalar or array."""
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -133,18 +137,13 @@ def initiate_triangulation(tissue: Tissue, double: bool) -> CentreTriangulation:
     lengths are the current centre–vertex distances.
     """
     topo = tissue.topology
-    x = tissue.vertices
     centres = cell_centroids(tissue)
-    distances = np.empty(len(topo.cell_vertices))
-    for t, (c, v) in enumerate(
-        zip(topo.triangle_cells, topo.cell_vertices, strict=True)
-    ):
-        com = centres[c]
-        distances[t] = np.sqrt(
-            (com[0] - x[v, 0]) * (com[0] - x[v, 0])
-            + (com[1] - x[v, 1]) * (com[1] - x[v, 1])
-            + (com[2] - x[v, 2]) * (com[2] - x[v, 2])
-        )
+    spoke = centres[topo.triangle_cells] - tissue.vertices[topo.cell_vertices]
+    distances = np.sqrt(
+        spoke[:, 0] * spoke[:, 0]
+        + spoke[:, 1] * spoke[:, 1]
+        + spoke[:, 2] * spoke[:, 2]
+    )
     if not double:
         return CentreTriangulation(centres=centres, spokes=distances)
     return CentreTriangulation(
@@ -167,10 +166,7 @@ class ModelState:
     pressure_factor: float = 0.0
     rest_positions: FloatArray = field(init=False)
     triangles: Triangles = field(init=False)
-    material: MaterialParameters = field(init=False)
-    _material_args: tuple[float, float, float, float, bool, bool, int, float, float] = (
-        field(init=False, repr=False)
-    )
+    _material_args: MaterialArgs = field(init=False, repr=False)
     _extensions: FloatArray = field(init=False, repr=False)  # empty if single
     _fixed: tuple[IntArray, IntArray] = field(init=False, repr=False)
     stress_tensor: FloatArray = field(init=False)
@@ -198,8 +194,7 @@ class ModelState:
             feedback.initiate_microtubules(tissue.cell_variables)
         self.rest_positions = tissue.vertices.copy()
         self.triangles = Triangles.from_tissue(tissue, membrane.double_rest_lengths)
-        self.material = MaterialParameters.from_membrane(membrane)
-        self._material_args = self.material.as_tuple()
+        self._material_args = MaterialParameters.from_membrane(membrane).as_tuple()
         ext = tissue.triangulation.wall_extensions
         self._extensions = np.empty(0) if ext is None else ext
         edge = np.flatnonzero(tissue.topology.boundary)
@@ -286,16 +281,16 @@ class ModelState:
         tri = self.triangles
         topo = tissue.topology
         if model.fibres is not None:
-            f = model.fibres
+            fibres = model.fibres
             feedback.update_fibres(
                 cell_vars,
                 h,
-                f.rate,
-                feedback.COUPLING_CODES[f.coupling],
-                f.k_hill,
-                f.n_hill,
-                f.velocity_threshold,
-                *f.moduli(membrane.young_matrix, membrane.young_fibre),
+                fibres.rate,
+                feedback.COUPLING_CODES[fibres.coupling],
+                fibres.k_hill,
+                fibres.n_hill,
+                fibres.velocity_threshold,
+                *fibres.moduli(membrane.young_matrix, membrane.young_fibre),
             )
         mechanics.trbs_update(
             topo.offsets,
@@ -324,8 +319,10 @@ class ModelState:
         if self.pressure_factor > 1.0:
             self.pressure_factor = 1.0
         if model.microtubules is not None:
-            m = model.microtubules
-            feedback.update_microtubules(cell_vars, h, m.rate, *m.gate())
+            microtubules = model.microtubules
+            feedback.update_microtubules(
+                cell_vars, h, microtubules.rate, *microtubules.gate()
+            )
         if model.growth is not None:
             growth.update_growth(
                 topo.offsets,
@@ -457,8 +454,8 @@ def _volume_diagnostic(
 @numba.njit(cache=True)
 def _velocity_diagnostic(
     cell_vars: FloatArray,
-    offsets: NDArray[np.int64],
-    cell_vertices: NDArray[np.int64],
+    offsets: IntArray,
+    cell_vertices: IntArray,
     vd: FloatArray,
 ) -> None:
     """Port of `Calculate::VertexVelocity`: mean vertex speed per cell."""
