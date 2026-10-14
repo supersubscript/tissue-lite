@@ -1,0 +1,23 @@
+{
+  "case": "aniso_growth",
+  "description": "Strain-driven growth with double rest lengths.",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "models/aniso-growth/model.model",
+  "model_edits": [],
+  "source_init": "patch19",
+  "n_vars": 39,
+  "concentration_ramp_index": null,
+  "sha256": {
+    "model.model": "480bc484242c9c664b9cb9f3415d4c31bf754239179425c9819e09f8535eb09e",
+    "solver.rk5": "394683a74a019f0d5d2bb6b5b247a927a63d97b4419c51e1d4a3402667f9eff3",
+    "input.init": "4b3751b4c3255c4f0b06c0bcb282bb911e61cbd427ef192d0960f40ba0b28041",
+    "final.init": "f59b519436ceb213f5c9c30448b00b392d09212d3a9c81e125b46fb41f26d470"
+  },
+  "generated": "2026-10-14T16:54:59+00:00"
+}

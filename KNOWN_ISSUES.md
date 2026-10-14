@@ -1,0 +1,81 @@
+# Known issues
+
+tissue-lite reproduces Tissue e74e457 as-is, so every item below is **kept on purpose**: the regression suite fails if one is "fixed". Each is logged here for a later, deliberate fix. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`); ✔ marks items confirmed by the regression data, the others come from code reading.
+
+## Solver (`solver.py`, Tissue `rungeKutta.cc`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| S1 ✔ | Step size is capped at the initial step h1 after every step. | `simulate` loop, `if (h > h1_) h = h1_` | Error control can only shrink steps; t = 600 needs ≥ 120k steps. |
+| S2 ✔ | Per-step updates receive the trial step `h`, not the accepted `hDid`. | `rungeKutta.cc:225` | After a rejection, fibres, MTs, growth and the pressure ramp advance too far. |
+| S3 | Stage 3 writes `ak2W` instead of `ak3W`. | `rungeKutta.cc:486` | Wrong tableau for wall variables; latent, as wall derivatives are always 0. Not ported (walls are not integrated). |
+| S4 ✔ | Feedback (fibres, MTs, growth) is explicit Euler outside the error control. | `updateReactions` | First order in time; results depend on the step history. |
+| S5 ✔ | Stage derivatives see copies of the cell variables, but the top-of-loop call writes the real state. | `derivs` vs `rkck` | Diagnostics (velocity, angles, var 20, var 25) describe the state at the start of the step. The velocity gates in `update` therefore read the velocity of the previous accepted state, one step stale. |
+| S6 ✔ | With more than two frames, t_end is printed twice (just before and after the last step); `tissue.pvd` lists only n frames. | print-time clipping | n + 1 VTU frames for n > 2. |
+| S7 | No convergence criterion. | solver file `t_end` | "Equilibrium" is assumed at a fixed time. |
+
+The solver replacement (quasi-static Newton, compared against an implicit stiff integrator) is tracked as a separate issue.
+
+## TRBS membrane (`mechanics.py`, Tissue `mechanicalTRBS.cc`, `VertexFromTRBScenterTriangulationMT`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| T1 | When the MT vector in the rest frame is shorter than 1e-4, a random direction from `rand()` is used, inside `derivs`. | `:4143`, `:5047` | The right-hand side is not a function of the state; breaks RK error control. Reproducible only because glibc `rand()` is seeded with 1 (ported in `rand.py`). |
+| T2 | The 1e-4 threshold is applied to `adj(F)·a`, without 1/det F, and to the unnormalised in-plane MT. | `:4143` | The fallback triggers depending on deformation and on how far the MT points out of plane. |
+| T3 | Sliver-triangle "fix" adds the accumulated centre and vertex derivatives onto all three nodes; only angles near 0° are detected, not near 180°. | `:4507–4535` | Spurious forces on degenerate triangles. Not applied in `update`. |
+| T4 | The stress Jacobi eigen loop applies one extra rotation (pivot recomputed at the loop top) and loses the rotation sign; the strain loop does not. | `:5529` | Eigenvector signs and, rarely, the selected axis differ from `numpy.linalg.eigh`. |
+| T5 | Principal stress is selected by |value| here but signed in the (dead) neighbour branch. | `:5606` vs `:6365` | Compressive strain can be reported as the maximum. |
+| T6 | Update's isotropic stress uses SVK λT, μT while forces come from biquadratic springs; the anisotropic part uses equipartition, not Delingette's 2Δμ. | `:4275` | Reported stresses are not exactly those of the force model. |
+| T7 | Var 20 holds Y_T in `derivs` and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is always Y_T. | index layout | The isotropic energy is never kept (`CellMechanics.energy_isotropic` exposes it). |
+| T8 | Var 19 ("area ratio" in model files) is the total rest area. | `update` | Mislabelled output. |
+| T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth runs (`CellMechanics.normal` is NaN there). |
+| T10 | Var 21 ("MT stress") is the von Mises stress √(s1² + s2² − s1 s2). | `update` | Mislabelled output. |
+| T11 | Header documents p10 as "unused"; it selects double rest lengths (p10 == 1). | constructor | Misleading model files. |
+
+## Concentration softening, MF=10 (`ConcentrationSoftening`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| C1 ✔ | K and n are read from p9 and p10, not from the "hill parameters" p11 and p12. | `:3520` | `celly/test_auxin_decay` sets p9 = p10 = 0, so K = 0, n = 0 and the factor is 1 − 0^0/(0^0 + c^0) = 1/2 everywhere: both moduli halved, independent of auxin. The intended (0.005, 2) are ignored. |
+| C2 | p9 also selects the TETA branch when 1, and p10 == 1 also means double rest lengths. | constructor | K = 1 or n = 1 cannot be expressed without side effects (the legacy reader rejects p9 = 1). |
+| C3 | `derivs` does not write Y_T (var 20) for MF=10. | `:3540` | Var 20 keeps the energy from the last update. |
+
+## Pressure (`Pressure`, Tissue `mechanical.cc`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| P1 | Each triangle node gets P·A/2; the consistent share is P·A/3. | `mechanical.cc:2454` | Effective turgor is 1.5 P; shapes unchanged, fitted moduli 1.5× off. |
+| P2 ✔ | The "linear ramp-up" parameter is a ramp *time*: the factor grows by h/p2 per step. | `update` | p2 = 0.001 reaches full pressure on the first step (h = 5e-3), i.e. no ramp. |
+
+## Feedback (`feedback.py`, Tissue `fiberModel.cc`, `directionUpdate.cc`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| F1 ✔ | FiberModel flag 2 (`hill_direct`, used by `models/aniso`) sets Y_L = ½(1 + h(a))·Y_f, dropping Y_m and the velocity gate; its initialisation includes Y_m. | `fiberModel.cc:200–205` | With Y_m = 50, Y_f = 1000 the material is never isotropic and the MT direction is the softer one for a < 0.92. |
+| F2 ✔ | FiberModel has its own Y_m, Y_f, which may differ from the membrane's. | model files | `models/iso-growth` uses (100, 0) in FiberModel and (50, 1000) in TRBS. The legacy reader warns and keeps both. |
+| F3 | `models/*` lack `Calculate::VertexVelocity`, so var 22 is never written and every velocity gate (300) is inert. | model files | MT and fibre feedback act during transients. |
+| F4 | FiberModel returns early when its rate is 0, so `initialise` still runs but nothing updates. | `fiberModel.cc` | Expected, but initialisation alone can change Y_L. |
+
+## Growth (`growth.py`, Tissue `growth.cc`, `CenterTriangulation::WallGrowth::StrainTRBS`)
+
+| # | Issue | Tissue source | Effect |
+|---|---|---|---|
+| G1 ✔ | The equilibrium gate is commented out (`if(true)`); the velocity threshold is unused. | `growth.cc:866–870` | `*-growth` models grow every step, away from equilibrium. |
+| G2 ✔ | Hard-coded inputs: var 3 as the strain along the growth axis (never written by any retained reaction) and var 7, the maximal **stress**, compared with a strain threshold. | `growth.cc` | Growth is driven by stress against a strain threshold; the var 3 branch depends on the init file. |
+| G3 ✔ | Growth counts are written to var 30. | `growth.cc` | Hidden slot use. |
+
+## State layout and model files
+
+| # | Issue | Effect |
+|---|---|---|
+| L1 | All state lives in magic cell-variable slots, some hard-coded (3, 7, 22, 25, 30) and some from model files. | The legacy reader accepts only the layouts used by the project (`layout.py`) and rejects others. |
+| L2 | `TemplateVolumeChange` stores into cells 1–3 of var 25 (cells, not variables), with the total derivative taken before boundary zeroing. | Needs at least four cells; mixes per-tissue scalars into per-cell data. |
+| L3 | `StaticDirection` / `ParallellDirection` are no-ops without division. | Ignored by the reader. |
+| L4 | Print flags other than 2 (VTU) are not supported; `models/*` use flag 6 (PLY). | The CLI warns and writes VTU. |
+
+## tissue-lite limitations (not Tissue quirks)
+
+| # | Issue |
+|---|---|
+| X1 | `CellMechanics.young_transverse` uses 2Y_m + Y_f − Y_L and ignores concentration softening. |
+| X2 | Results are bit-identical to Tissue on the reference platform (x86-64, glibc 2.39); other libm versions may differ in the last bits of `pow`, `acos`, `cos` and `sin`, hence the tolerances in the tests. |

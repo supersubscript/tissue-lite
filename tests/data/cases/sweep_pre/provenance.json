@@ -1,0 +1,23 @@
+{
+  "case": "sweep_pre",
+  "description": "Sweep prerun: pressure ramp, no feedback (prerunAndSim step 1).",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/zfix_rerun/mod_120_0_04/model_pre.model",
+  "model_edits": [],
+  "source_init": "patch19",
+  "n_vars": 35,
+  "concentration_ramp_index": null,
+  "sha256": {
+    "model.model": "fbe00ae88c249b9f4cbe33e57d787db88a83c2d344df3d08f3034ed6081e70ff",
+    "solver.rk5": "2a23a805a735b18a189945519ee790f5d41b1655aecc62328f0780e65da93b03",
+    "input.init": "01e9e3a3b2e7eed27920e421d7eeacfdbe2c47ecde3e2ce663bc463ed6945ccb",
+    "final.init": "2808a74e802ce9776f9fc54c4a7a48046767a0a7c8b06389f7c64bc3efc4708b"
+  },
+  "generated": "2026-10-14T16:54:55+00:00"
+}

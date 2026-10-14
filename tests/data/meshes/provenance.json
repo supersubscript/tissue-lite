@@ -1,0 +1,9 @@
+{
+  "source": "flower-experiments/results/zfix_rerun/mod_120_0_04/templ.init",
+  "source_sha256": "ba1eca8dfb981f80512cc596383f907d7e0a0a2ff83b84d231fd7611497a07cd",
+  "command": "uv run python reference/cut_patch.py templ.init N_CELLS patchN.init",
+  "files": {
+    "patch19.init": {"cells": 19, "sha256": "01e9e3a3b2e7eed27920e421d7eeacfdbe2c47ecde3e2ce663bc463ed6945ccb"},
+    "patch100.init": {"cells": 100, "sha256": "7eeeab769271596e61324be22c70a996f89e83c67a79bd0d15b5aa52f5c4c879"}
+  }
+}

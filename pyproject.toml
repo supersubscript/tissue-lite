@@ -1,0 +1,55 @@
+[project]
+name = "tissue-lite"
+version = "0.1.0"
+description = "Minimal reimplementation of the Tissue vertex simulator for meristem mechanics"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "click>=8.2,<9",
+    "numba>=0.63,<1",
+    "numpy>=2.3,<3",
+]
+
+[project.scripts]
+tissue-lite = "tissue_lite.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",
+    "pre-commit>=4.6,<5",
+    "ruff>=0.16.6,<0.17",
+    "ty>=0.0.81,<0.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["source/tissue_lite"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long fidelity runs, excluded from CI"]
+addopts = "-m 'not slow'"
+
+[tool.ruff]
+target-version = "py314"
+src = ["source"]
+exclude = [".claude", "reference/build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "tissue_lite.mechanics.Boundary",
+    "tissue_lite.solver.CashKarp",
+]
+
+[tool.ty.environment]
+python-version = "3.14"
+root = ["source", "tests"]
