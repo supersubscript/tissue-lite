@@ -7,10 +7,10 @@ tissue-lite reproduces Tissue e74e457 as-is by default. Status: **Resolved** (ti
 | # | Issue | Tissue source | Effect | Status |
 |---|---|---|---|---|
 | S1 ✔ | Step size is capped at the initial step h1 after every step. | `simulate` loop, `if (h > h1_) h = h1_` | Error control can only shrink steps; t = 600 needs ≥ 120k steps. | Superseded by `QuasiStatic`; lifting the cap would let the explicit feedback (S4) take large steps |
-| S2 ✔ | Per-step updates receive the trial step `h`, not the accepted `hDid`. | `rungeKutta.cc:225` | After a rejection, fibres, MTs, growth and the pressure ramp advance too far. | Open |
+| S2 ✔ | Per-step updates receive the trial step `h`, not the accepted `hDid`. | `rungeKutta.cc:225` | After a rejection, fibres, MTs, growth and the pressure ramp advance too far. | Fixed by `CashKarp(fidelity=False)` |
 | S3 | Stage 3 writes `ak2W` instead of `ak3W`. | `rungeKutta.cc:486` | Wrong tableau for wall variables; latent, as wall derivatives are always 0. Not ported (walls are not integrated). | Not ported |
 | S4 ✔ | Feedback (fibres, MTs, growth) is explicit Euler outside the error control. | `updateReactions` | First order in time; results depend on the step history. | Superseded by `QuasiStatic` (N1) |
-| S5 ✔ | Stage derivatives see copies of the cell variables, but the top-of-loop call writes the real state. | `derivs` vs `rkck` | Diagnostics (velocity, angles, var 20, var 25) describe the state at the start of the step. The velocity gates in `update` therefore read the velocity of the previous accepted state, one step stale. | Open |
+| S5 ✔ | Stage derivatives see copies of the cell variables, but the top-of-loop call writes the real state. | `derivs` vs `rkck` | Diagnostics (velocity, angles, var 20, var 25) describe the state at the start of the step. The velocity gates in `update` therefore read the velocity of the previous accepted state, one step stale. | Fixed by `CashKarp(fidelity=False)` |
 | S6 ✔ | With more than two frames, t_end is printed twice (just before and after the last step); `tissue.pvd` lists only n frames. | print-time clipping | n + 1 VTU frames for n > 2. | Open |
 | S7 | No convergence criterion. | solver file `t_end` | "Equilibrium" is assumed at a fixed time. | Open |
 

@@ -5,7 +5,7 @@ integrated; every other variable is carried through each step unchanged, exactly
 Tissue's `y + h * 0` does (KNOWN_ISSUES S3 is therefore not ported). Kept as in
 Tissue: the step is capped at `max_step` after every step (S1), per-step updates
 receive the trial step rather than the accepted one (S2), and the error scale is
-`|y| + |h dy| + 1e-9 tolerance`.
+`|y| + |h dy| + 1e-9 tolerance`. `CashKarp(fidelity=False)` fixes S2 and S5.
 """
 
 import math
@@ -46,7 +46,9 @@ class CashKarp:
     """Tissue's RK5Adaptive settings: initial and maximal step, relative tolerance.
 
     `max_step` is both the initial step and the cap applied after every step
-    (KNOWN_ISSUES S1), so error control can only shrink steps.
+    (KNOWN_ISSUES S1), so error control can only shrink steps. With `fidelity` False,
+    the per-step updates get the accepted step (S2) and the diagnostics they read are
+    re-evaluated at the accepted state (S5), at one extra force evaluation per step.
 
     Raises:
         ValueError: If `max_step` or `tolerance` is not positive.
@@ -54,6 +56,7 @@ class CashKarp:
 
     max_step: float = 5e-3
     tolerance: float = 1e-4
+    fidelity: bool = True
 
     def __post_init__(self) -> None:
         if self.max_step <= 0 or self.tolerance <= 0:
@@ -75,6 +78,7 @@ class CashKarpRun:
         self.state = state
         self.max_step = config.max_step
         self.tolerance = config.tolerance
+        self.fidelity = config.fidelity
         self.h = config.max_step
 
     def step(self, t: float, t_bound: float, derivatives: FloatArray) -> StepResult:
@@ -82,7 +86,8 @@ class CashKarpRun:
 
         `derivatives` are those of the current positions. The step shrinks until the
         scaled error passes; the per-step updates then get the trial step, not the
-        accepted one (KNOWN_ISSUES S2), and `accepted` is False if it had to shrink.
+        accepted one (KNOWN_ISSUES S2), unless `fidelity` is off, and `accepted` is
+        False if it had to shrink.
 
         Raises:
             RuntimeError: If the step size underflows.
@@ -95,7 +100,11 @@ class CashKarpRun:
         if t + h > t_bound:
             h = t_bound - t
         h_did, h_next = self._find_accepted_step(t, h, derivatives, scale)
-        state.update(h)
+        if self.fidelity:
+            state.update(h)
+        else:
+            state.compute_forces()
+            state.update(h_did)
         self.h = min(h_next, self.max_step)
         return StepResult(t=t + h_did, accepted=h_did == h)
 

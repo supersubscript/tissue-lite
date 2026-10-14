@@ -9,13 +9,14 @@ from conftest import (
     CASES_DIR,
     CaseRunner,
     assert_tissues_close,
+    case_state,
     read_case_model,
     read_case_tissue,
 )
 
 from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.solvers.cash_karp import CashKarp
-from tissue_lite.solvers.simulate import prerun_and_simulate, simulate
+from tissue_lite.solvers.simulate import integrate, prerun_and_simulate, simulate
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -86,3 +87,33 @@ def test_simulate_rejects_empty_time_span() -> None:
     case = CASES_DIR / "sweep_pre"
     with pytest.raises(ValueError, match="t_end"):
         simulate(read_case_model(case).model, read_case_tissue(case), t_end=0.0)
+
+
+@pytest.mark.parametrize("fidelity", [True, False])
+def test_cash_karp_fidelity_switch(fidelity: bool) -> None:
+    case = CASES_DIR / "sweep_rejections"
+    settings = read_solver_file(case / "solver.rk5")
+    state = case_state(case)
+    update = state.update
+    steps: list[float] = []
+    fresh: list[bool] = []
+
+    def record(h: float) -> None:
+        scratch = state.tissue.cells.copy()
+        state.compute_forces_at(scratch, state.positions)
+        fresh.append(
+            np.allclose(scratch.velocity, state.tissue.cells.velocity, rtol=1e-12)
+        )
+        steps.append(h)
+        update(h)
+
+    state.update = record  # ty: ignore[invalid-assignment]
+    solver = CashKarp(settings.solver.max_step, settings.solver.tolerance, fidelity)
+    result = integrate(state, settings.t_start, settings.t_end, 0, solver)
+    assert result.rejected_steps > 0
+    span = settings.t_end - settings.t_start
+    # Tissue's S2 advances the feedback by the trial steps; the fix by the accepted.
+    assert np.isclose(sum(steps), span) != fidelity
+    # S5: the velocity gates read the previous state unless the fix re-evaluates it
+    # (re-normalising the microtubule axis can change the last bit).
+    assert all(fresh) != fidelity
