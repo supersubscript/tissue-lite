@@ -65,11 +65,12 @@ def simulate(
     `n_frames` of 0 prints nothing, 1 the end state, 2 the start and end, more evenly
     spaced frames, with t_end twice for a fidelity stepper (KNOWN_ISSUES S6). With
     `steady_tolerance`, the run ends early, printing its state, after the first step
-    whose largest position change per unit time is below it (S7). Each call restarts
-    `rand()` from seed 1 (T1).
+    whose largest position change per unit time is below it (S7); a writer's
+    `tissue.pvd` still lists the scheduled frames. Each call restarts `rand()` from
+    seed 1 (T1).
 
     Raises:
-        ValueError: If the time span is empty.
+        ValueError: If the time span is empty or `steady_tolerance` is not positive.
         RuntimeError: If the step size underflows.
     """
     state = ModelState(model=model, tissue=tissue.copy())
@@ -91,11 +92,14 @@ def integrate(
     documents the arguments.
 
     Raises:
-        ValueError: If `t_end` does not exceed `t_start`.
+        ValueError: If `t_end` does not exceed `t_start` or `steady_tolerance` is not
+            positive.
         RuntimeError: If the step size underflows.
     """
     if not (t_end - t_start > 0.0):
         raise ValueError("t_end must exceed t_start")
+    if steady_tolerance is not None and not steady_tolerance > 0.0:
+        raise ValueError("steady_tolerance must be positive")
     run = solver.start(state)
     tissue = state.tissue
     frames: list[Frame] = []

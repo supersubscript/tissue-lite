@@ -84,7 +84,7 @@ Both apply one feedback update of length `step` (default 0.1) and then a mechani
 | N3 | Trial evaluations are pure functions of the positions (`ModelState.compute_trial_forces`): the random fibre fallback (T1) restarts from the current seed on every call and the diagnostics go to a scratch copy. | A cell whose microtubule axis vanishes gets the same pseudo-random fibre direction in every evaluation of a step; the real stream advances only in the frame loop's own evaluation. | By design |
 | N4 | `QuasiStatic` skips the mechanical transient: every printed frame is an equilibrium of the current feedback state, and the velocity diagnostic (var 22) is the residual force, i.e. the drift of N2 or 0. | Velocity gates (300) are always open, as they are in practice in Tissue (F3). Shapes differ from Tissue's where its feedback acted during the transient (issue #2). The inflation from a flat rest state is a snap-through that costs the first step 60–200 Newton iterations; later steps take 1–5. | By design |
 | N5 | The Jacobian pattern ignores Tissue's sliver branch (T3). | More Newton iterations on a sliver, never a wrong equilibrium: the residual is exact. | Open (follows T3) |
-| N6 | S1, S2 and S4 do not apply; S6 (t_end printed twice for n_frames > 2) and S7 still do, since the frame loop is shared. | Runs to t_end; the S6 sliver step to t_end costs one residual evaluation once converged. | S6 fixed; S7 opt-in |
+| N6 | S1 and S2 do not apply and S4 remains as N1; the frame loop is shared, so S6 and S7 applied too. | Exactly `n_frames` frames and no sliver step (S6 fixed); runs to t_end unless `steady_tolerance` is set (S7). | Fixed |
 
 ## tissue-lite limitations (not Tissue quirks)
 
