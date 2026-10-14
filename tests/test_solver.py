@@ -4,17 +4,25 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import CASES, CASES_DIR, CaseRunner, assert_tissues_close
+from conftest import (
+    CASES,
+    CASES_DIR,
+    CaseRunner,
+    assert_tissues_close,
+    read_case_model,
+    read_case_tissue,
+)
 
-from tissue_lite.legacy import read_model_file, read_solver_file
-from tissue_lite.solver import CashKarp, prerun_and_simulate, simulate
-from tissue_lite.tissue import Tissue
+from tissue_lite.legacy.solver_file import read_solver_file
+from tissue_lite.solvers.cash_karp import CashKarp
+from tissue_lite.solvers.simulate import prerun_and_simulate, simulate
 
 
 @pytest.mark.parametrize("case", CASES)
 def test_final_state_matches_tissue(case: Path, run_case: CaseRunner) -> None:
     result, _ = run_case(case)
-    assert_tissues_close(result.final, Tissue.read_init(case / "final.init"))
+    layout = read_case_model(case).layout
+    assert_tissues_close(result.final, read_case_tissue(case, "final.init"), layout)
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -38,10 +46,11 @@ def test_prerun_handoff_matches_chained_tissue_runs() -> None:
     pre, main = CASES_DIR / "sweep_pre", CASES_DIR / "sweep_120_0"
     pre_settings = read_solver_file(pre / "solver.rk5")
     settings = read_solver_file(main / "solver.rk5")
+    legacy = read_case_model(main)
     _, result = prerun_and_simulate(
-        read_model_file(main / "model.model"),
-        read_model_file(pre / "model.model"),
-        Tissue.read_init(pre / "input.init"),
+        legacy.model,
+        read_case_model(pre).model,
+        read_case_tissue(pre),
         t_end=settings.t_end,
         n_frames=settings.n_frames,
         solver=settings.solver,
@@ -49,16 +58,19 @@ def test_prerun_handoff_matches_chained_tissue_runs() -> None:
         prerun_frames=pre_settings.n_frames,
         prerun_solver=pre_settings.solver,
     )
-    assert_tissues_close(result.final, Tissue.read_init(main / "final.init"))
+    assert_tissues_close(
+        result.final, read_case_tissue(main, "final.init"), legacy.layout
+    )
 
 
 def test_input_is_not_modified() -> None:
     case = CASES_DIR / "sweep_pre"
-    tissue = Tissue.read_init(case / "input.init")
+    tissue = read_case_tissue(case)
     before = tissue.copy()
-    simulate(read_model_file(case / "model.model"), tissue, t_end=0.05, n_frames=2)
+    simulate(read_case_model(case).model, tissue, t_end=0.05, n_frames=2)
     np.testing.assert_array_equal(tissue.vertices, before.vertices)
-    np.testing.assert_array_equal(tissue.cell_variables, before.cell_variables)
+    for field, original in zip(tissue.cells, before.cells, strict=True):
+        np.testing.assert_array_equal(field, original)
 
 
 @pytest.mark.parametrize(
@@ -74,8 +86,4 @@ def test_cash_karp_rejects_non_positive_settings(
 def test_simulate_rejects_empty_time_span() -> None:
     case = CASES_DIR / "sweep_pre"
     with pytest.raises(ValueError, match="t_end"):
-        simulate(
-            read_model_file(case / "model.model"),
-            Tissue.read_init(case / "input.init"),
-            t_end=0.0,
-        )
+        simulate(read_case_model(case).model, read_case_tissue(case), t_end=0.0)

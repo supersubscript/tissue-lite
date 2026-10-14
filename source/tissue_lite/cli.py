@@ -10,10 +10,12 @@ from pathlib import Path
 
 import click
 
-from tissue_lite.legacy import read_model_file, read_solver_file
+from tissue_lite.legacy.init_file import read_init, write_init
+from tissue_lite.legacy.model_file import read_model_file
+from tissue_lite.legacy.slots import SlotLayout
+from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.model import MeristemModel
-from tissue_lite.solver import simulate
-from tissue_lite.tissue import Tissue
+from tissue_lite.solvers.simulate import simulate
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,17 @@ _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
     show_default=True,
     help="Directory for the VTU frames and tissue.pvd.",
 )
+@click.option(
+    "--second-axes",
+    is_flag=True,
+    help="TOML models only: store the second stress and strain axes in the growth "
+    "models' slots (legacy model files carry their own layout).",
+)
+@click.option(
+    "--concentration-slot",
+    type=int,
+    help="TOML models only: cell-variable column holding the softening concentration.",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Logs debug messages.")
 def main(
     model_file: Path,
@@ -47,6 +60,8 @@ def main(
     solver_file: Path,
     init_output: Path | None,
     vtk_output: Path,
+    second_axes: bool,
+    concentration_slot: int | None,
     verbose: bool,
 ) -> None:
     """Simulates MODEL_FILE from INIT_FILE with the settings in SOLVER_FILE."""
@@ -55,18 +70,25 @@ def main(
     )
     if model_file.suffix == ".toml":
         model = MeristemModel.from_toml(model_file)
+        layout = SlotLayout(
+            second_axes=second_axes, concentration_slot=concentration_slot
+        )
+        if model.membrane.softening is not None and concentration_slot is None:
+            raise click.UsageError("A softening model needs --concentration-slot")
     else:
-        model = read_model_file(model_file)
+        legacy = read_model_file(model_file)
+        model, layout = legacy.model, legacy.layout
     settings = read_solver_file(solver_file)
     result = simulate(
         model,
-        Tissue.read_init(init_file),
+        read_init(init_file, layout),
         t_end=settings.t_end,
         n_frames=settings.n_frames,
         solver=settings.solver,
         t_start=settings.t_start,
         output_dir=vtk_output,
+        slot_layout=layout,
     )
     if init_output is not None:
-        result.final.write_init(init_output)
+        write_init(result.final, init_output, layout)
         logger.info("Wrote %s", init_output)

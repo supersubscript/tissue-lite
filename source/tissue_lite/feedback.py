@@ -5,18 +5,43 @@ Both are explicit updates applied once per accepted solver step.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 import numba
 import numpy as np
 
-from tissue_lite import layout
-from tissue_lite.tissue import FloatArray
+from tissue_lite.arrays import FloatArray
+from tissue_lite.material import TRBSMembrane
+from tissue_lite.tissue import CellState
 
 type Coupling = Literal["linear", "hill", "hill_direct"]
 type Initialisation = Literal["none", "isotropic", "anisotropic"]
 
 COUPLING_CODES: dict[Coupling, int] = {"linear": 0, "hill": 1, "hill_direct": 2}
+
+
+class FibreKernel(NamedTuple):
+    """`FibreStiffness` as the kernel takes it."""
+
+    rate: float
+    coupling: int
+    k_hill: float
+    n_hill: float
+    velocity_threshold: float
+    young_matrix: float
+    young_fibre: float
+
+
+class MicrotubuleKernel(NamedTuple):
+    """`MicrotubuleAlignment` as the kernel takes it.
+
+    Gate levels: 0 none, 1 velocity, 2 velocity and stress difference.
+    """
+
+    rate: float
+    gate_level: int
+    velocity_threshold: float
+    stress_difference_threshold: float
 
 
 @dataclass(frozen=True)
@@ -38,13 +63,24 @@ class FibreStiffness:
     young_matrix: float | None = None
     young_fibre: float | None = None
 
-    def get_moduli(
-        self, young_matrix: float, young_fibre: float
-    ) -> tuple[float, float]:
-        """Returns (Ym, Yf), falling back to the given membrane moduli."""
+    def get_moduli(self, membrane: TRBSMembrane) -> tuple[float, float]:
+        """Returns (Ym, Yf), falling back to the membrane's moduli."""
         return (
-            young_matrix if self.young_matrix is None else self.young_matrix,
-            young_fibre if self.young_fibre is None else self.young_fibre,
+            membrane.young_matrix if self.young_matrix is None else self.young_matrix,
+            membrane.young_fibre if self.young_fibre is None else self.young_fibre,
+        )
+
+    def to_kernel(self, membrane: TRBSMembrane) -> FibreKernel:
+        """Flattens the definition for `update_fibres`."""
+        young_matrix, young_fibre = self.get_moduli(membrane)
+        return FibreKernel(
+            rate=self.rate,
+            coupling=COUPLING_CODES[self.coupling],
+            k_hill=self.k_hill,
+            n_hill=self.n_hill,
+            velocity_threshold=self.velocity_threshold,
+            young_matrix=young_matrix,
+            young_fibre=young_fibre,
         )
 
 
@@ -67,13 +103,15 @@ class MicrotubuleAlignment:
         ):
             raise ValueError("stress_difference_threshold needs velocity_threshold")
 
-    def get_gate(self) -> tuple[int, float, float]:
-        """Returns (gate level, velocity threshold, stress threshold) for the kernel."""
+    def to_kernel(self) -> MicrotubuleKernel:
+        """Flattens the definition for `update_microtubules`."""
         if self.velocity_threshold is None:
-            return 0, 0.0, 0.0
+            return MicrotubuleKernel(self.rate, 0, 0.0, 0.0)
         if self.stress_difference_threshold is None:
-            return 1, self.velocity_threshold, 0.0
-        return 2, self.velocity_threshold, self.stress_difference_threshold
+            return MicrotubuleKernel(self.rate, 1, self.velocity_threshold, 0.0)
+        return MicrotubuleKernel(
+            self.rate, 2, self.velocity_threshold, self.stress_difference_threshold
+        )
 
 
 @numba.njit(cache=True)
@@ -83,106 +121,82 @@ def _hill_fraction(a: float | FloatArray, k: float, n: float) -> float | FloatAr
 
 
 def initiate_fibres(
-    fibres: FibreStiffness,
-    young_matrix: float,
-    young_fibre: float,
-    cell_vars: FloatArray,
+    fibres: FibreStiffness, membrane: TRBSMembrane, cells: CellState
 ) -> None:
     """Sets the initial longitudinal modulus from the stored stress anisotropy."""
+    young_matrix, young_fibre = fibres.get_moduli(membrane)
     if fibres.initialise == "isotropic":
-        cell_vars[:, layout.STRESS_ANISOTROPY] = 0
-        cell_vars[:, layout.YOUNG_LONGITUDINAL] = young_matrix + 0.5 * young_fibre
+        cells.stress_anisotropy[:] = 0
+        cells.young_longitudinal[:] = young_matrix + 0.5 * young_fibre
     elif fibres.initialise == "anisotropic":
-        a = cell_vars[:, layout.STRESS_ANISOTROPY]
+        a = cells.stress_anisotropy
         f = (
             a
             if fibres.coupling == "linear"
             # The Numba kernel keeps libm pow; numpy's power can differ in the last bit.
             else _hill_fraction(a, fibres.k_hill, fibres.n_hill)
         )
-        cell_vars[:, layout.YOUNG_LONGITUDINAL] = (
-            young_matrix + 0.5 * (1 + f) * young_fibre
-        )
+        cells.young_longitudinal[:] = young_matrix + 0.5 * (1 + f) * young_fibre
 
 
 @numba.njit(cache=True)
-def update_fibres(
-    cell_vars: FloatArray,
-    h: float,
-    rate: float,
-    coupling: int,
-    k: float,
-    n: float,
-    velocity_threshold: float,
-    young_matrix: float,
-    young_fibre: float,
-) -> None:
+def update_fibres(cells: CellState, h: float, fibres: FibreKernel) -> None:
     """Applies one explicit fibre-stiffness update of length h."""
+    rate, coupling, k, n, velocity_threshold, young_matrix, young_fibre = fibres
     if rate == 0.0:
         return
-    for c in range(cell_vars.shape[0]):
-        a = cell_vars[c, layout.STRESS_ANISOTROPY]
-        young_l = cell_vars[c, layout.YOUNG_LONGITUDINAL]
+    for c in range(cells.young_longitudinal.shape[0]):
+        a = cells.stress_anisotropy[c]
+        young_l = cells.young_longitudinal[c]
         gate = (
-            cell_vars[c, layout.VELOCITY] < velocity_threshold
+            cells.velocity[c] < velocity_threshold
             and young_l < young_matrix + young_fibre
         )
         if coupling == 0 and gate:
             delta = young_matrix + 0.5 * (1 + a) * young_fibre - young_l
-            cell_vars[c, layout.YOUNG_LONGITUDINAL] += rate * h * delta
+            cells.young_longitudinal[c] += rate * h * delta
         hill = _hill_fraction(a, k, n)
         if coupling == 1 and gate:
             delta = young_matrix + 0.5 * (1 + hill) * young_fibre - young_l
-            cell_vars[c, layout.YOUNG_LONGITUDINAL] += rate * h * delta
+            cells.young_longitudinal[c] += rate * h * delta
         if coupling == 2:
-            cell_vars[c, layout.YOUNG_LONGITUDINAL] = 0.5 * (1 + hill) * young_fibre
+            cells.young_longitudinal[c] = 0.5 * (1 + hill) * young_fibre
 
 
-def initiate_microtubules(cell_vars: FloatArray) -> None:
+def initiate_microtubules(cells: CellState) -> None:
     """Copies the stored principal stress direction into the microtubule axis."""
-    cell_vars[:, layout.MICROTUBULE] = cell_vars[:, layout.STRESS_DIRECTION]
+    cells.microtubule[:] = cells.stress_direction
 
 
 @numba.njit(cache=True)
 def update_microtubules(
-    cell_vars: FloatArray,
-    h: float,
-    rate: float,
-    gate_level: int,
-    velocity_threshold: float,
-    stress_difference_threshold: float,
+    cells: CellState, h: float, microtubules: MicrotubuleKernel
 ) -> None:
-    """Applies one explicit microtubule update of length h.
-
-    Args:
-        gate_level: 0 no gate, 1 velocity, 2 velocity and stress difference
-            (see `MicrotubuleAlignment.get_gate`).
-    """
+    """Applies one explicit microtubule update of length h."""
+    rate, gate_level, velocity_threshold, stress_difference_threshold = microtubules
     if rate == 0.0:
         return
-    target = layout.STRESS_START
-    mt = layout.MICROTUBULE_START
-    for c in range(cell_vars.shape[0]):
-        if gate_level >= 1 and not (cell_vars[c, layout.VELOCITY] < velocity_threshold):
+    mt = cells.microtubule
+    target = cells.stress_direction
+    for c in range(mt.shape[0]):
+        if gate_level >= 1 and not (cells.velocity[c] < velocity_threshold):
             continue
         if gate_level == 2:
-            s_max = cell_vars[c, layout.STRESS_MAX]
-            diff = abs((s_max - cell_vars[c, layout.VON_MISES_STRESS]) / s_max)
+            s_max = cells.stress_max[c]
+            diff = abs((s_max - cells.von_mises_stress[c]) / s_max)
             if not diff > stress_difference_threshold:
                 continue
         dot = 0.0
         for d in range(3):
-            dot += cell_vars[c, mt + d] * cell_vars[c, target + d]
+            dot += mt[c, d] * target[c, d]
         if dot < 0:
             for d in range(3):
-                cell_vars[c, mt + d] *= -1
+                mt[c, d] *= -1
         for d in range(3):
-            cell_vars[c, mt + d] += (
-                rate * h * (cell_vars[c, target + d] - cell_vars[c, mt + d])
-            )
+            mt[c, d] += rate * h * (target[c, d] - mt[c, d])
         norm = 0.0
         for d in range(3):
-            norm += cell_vars[c, mt + d] * cell_vars[c, mt + d]
+            norm += mt[c, d] * mt[c, d]
         norm = 1.0 / np.sqrt(norm)
         for d in range(3):
-            cell_vars[c, mt + d] *= norm
+            mt[c, d] *= norm

@@ -2,7 +2,7 @@
 
 Files, array names, point layout and number formatting (`%g`) follow Tissue's
 `VTUostream::write_cells2` and `write_walls3`, so existing readers such as
-`flower.output` load them unchanged.
+`flower.output` load them unchanged. Cell variables are numbered by a `SlotLayout`.
 """
 
 import logging
@@ -10,7 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from tissue_lite.tissue import FloatArray, Tissue, compute_cell_centroids
+from tissue_lite.arrays import FloatArray
+from tissue_lite.legacy.slots import SlotLayout
+from tissue_lite.tissue import Tissue, compute_cell_centroids
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +45,12 @@ def _shrunk_points(tissue: Tissue) -> FloatArray:
     return p + _CELL_SHRINK * (centres - p)
 
 
-def format_cells(tissue: Tissue) -> str:
+def format_cells(tissue: Tissue, layout: SlotLayout) -> str:
     """Returns the cell VTU file contents."""
     topo = tissue.topology
     sizes = topo.cell_sizes
     points = _shrunk_points(tissue)
-    v = tissue.cell_variables
+    v = layout.to_cell_variables(tissue)
     out = ['<VTKFile type="UnstructuredGrid" version="0.1">\n<UnstructuredGrid>\n']
     out.append(_piece_header(len(points), topo.num_cells))
     out.append(
@@ -152,15 +154,18 @@ def format_pvd(n_frames: int) -> str:
 class VtuWriter:
     """Writes frames as `VTK_cells%06d.vtu` / `VTK_walls%06d.vtu` plus `tissue.pvd`."""
 
-    def __init__(self, directory: Path, n_frames: int) -> None:
+    def __init__(self, directory: Path, n_frames: int, layout: SlotLayout) -> None:
         self.directory = directory
         self.n_frames = n_frames
+        self.layout = layout
 
     def write(self, index: int, tissue: Tissue) -> None:
         """Writes frame `index`; the first call also writes the PVD collection."""
         self.directory.mkdir(parents=True, exist_ok=True)
         if index == 0:
             (self.directory / "tissue.pvd").write_text(format_pvd(self.n_frames))
-        (self.directory / f"VTK_cells{index:06d}.vtu").write_text(format_cells(tissue))
+        (self.directory / f"VTK_cells{index:06d}.vtu").write_text(
+            format_cells(tissue, self.layout)
+        )
         (self.directory / f"VTK_walls{index:06d}.vtu").write_text(format_walls(tissue))
         logger.debug("Wrote frame %d to %s", index, self.directory)

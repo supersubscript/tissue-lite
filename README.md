@@ -8,17 +8,17 @@ It reproduces Tissue e74e457 **bit for bit** on every regression case and on the
 
 | Kept | Tissue reaction | tissue-lite |
 |---|---|---|
-| Anisotropic TRBS membrane on the centre triangulation (single and double rest lengths) | `VertexFromTRBScenterTriangulationMT` (MF=1) | `mechanics.TRBSMembrane` |
-| Concentration-driven softening (e.g. auxin) | same, MF=10 | `mechanics.ConcentrationSoftening` |
-| Turgor pressure with linear ramp | `Pressure3D::CenterTriangulation::Linear` | `mechanics.Pressure` |
-| Fixed boundary (all axes or some) | `VertexNoUpdateBoundary` | `mechanics.Boundary` |
+| Anisotropic TRBS membrane on the centre triangulation (single and double rest lengths) | `VertexFromTRBScenterTriangulationMT` (MF=1) | `material.TRBSMembrane`, `forces.compute_trbs_forces` |
+| Concentration-driven softening (e.g. auxin) | same, MF=10 | `material.ConcentrationSoftening` |
+| Turgor pressure with linear ramp | `Pressure3D::CenterTriangulation::Linear` | `material.Pressure`, `forces.compute_pressure_forces` |
+| Fixed boundary (all axes or some) | `VertexNoUpdateBoundary` | `material.Boundary` |
 | Stress-feedback fibre stiffness | `FiberModel` | `feedback.FibreStiffness` |
 | Microtubule alignment to stress | `UpdateMTDirectionEquilibrium` | `feedback.MicrotubuleAlignment` |
 | Strain-driven wall growth | `CenterTriangulation::WallGrowth::StrainTRBS` | `growth.StrainGrowth` |
-| Stress and strain outputs | TRBS `update` | `mechanics.CellMechanics` |
-| Diagnostics: velocity, angles, volume change | `Calculate::*`, `TemplateVolumeChange` | computed by `model.ModelState` |
-| Adaptive Cash–Karp RK5 | `RK5Adaptive` | `solver.CashKarp`, `solver.simulate` |
-| `.init` IO, VTU/PVD output (print flag 2) | `Tissue::readInit`, `VTUostream` | `tissue.Tissue`, `output.VtuWriter` |
+| Stress and strain outputs | TRBS `update` | `stress.update_cell_stress` |
+| Diagnostics: velocity, angles, volume change | `Calculate::*`, `TemplateVolumeChange` | `diagnostics` |
+| Adaptive Cash–Karp RK5 | `RK5Adaptive` | `solvers.cash_karp.CashKarp`, `solvers.simulate.simulate` |
+| `.init` IO, VTU/PVD output (print flag 2) | `Tissue::readInit`, `VTUostream` | `legacy.init_file`, `output.VtuWriter` |
 
 Everything else in Tissue (other reactions, division, other solvers and output formats) is dropped. Legacy `.model` files using anything outside this subset are rejected.
 
@@ -42,10 +42,10 @@ From Python:
 from pathlib import Path
 
 from tissue_lite.feedback import FibreStiffness, MicrotubuleAlignment
-from tissue_lite.mechanics import Boundary, Pressure, TRBSMembrane
+from tissue_lite.legacy.init_file import read_init
+from tissue_lite.material import Boundary, Pressure, TRBSMembrane
 from tissue_lite.model import MeristemModel
-from tissue_lite.solver import simulate
-from tissue_lite.tissue import Tissue
+from tissue_lite.solvers.simulate import simulate
 
 model = MeristemModel(
     membrane=TRBSMembrane(young_matrix=120.0, young_fibre=120.0),
@@ -54,12 +54,24 @@ model = MeristemModel(
     fibres=FibreStiffness(rate=0.01, k_hill=0.4, n_hill=2.0),
     microtubules=MicrotubuleAlignment(rate=0.2),
 )
-result = simulate(model, Tissue.read_init(Path("templ.init")), t_end=20.0, n_frames=10)
-# Per-cell stress/strain tensors, principal axes and anisotropies.
-mechanics = result.frames[-1].mechanics
+result = simulate(model, read_init(Path("templ.init")), t_end=20.0, n_frames=10)
+# Named per-cell arrays: stress/strain tensors, principal axes, anisotropies, moduli.
+cells = result.final.cells
 ```
 
-Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.read_model_file`). Cell variables keep Tissue's slot layout (`layout.py`), so VTU files and readers such as `flower.output` work unchanged.
+Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.model_file.read_model_file`). Per-cell state is named (`tissue.CellState`); Tissue's slot numbering lives only in `legacy.slots.SlotLayout`, used by the `.init` reader and writer and the VTU writer, so files and readers such as `flower.output` work unchanged.
+
+## Modules
+
+| Module | Owns |
+|---|---|
+| `topology`, `tissue`, `triangles` | Mesh connectivity, state (`Tissue`, `CellState`), centre-triangle index arrays |
+| `material`, `forces`, `stress` | Membrane, pressure and boundary parameters; force kernels; stress and strain update |
+| `feedback`, `growth`, `diagnostics` | Fibre and MT feedback, wall growth, velocity/angle/volume diagnostics |
+| `model` | `MeristemModel` and `ModelState`, which evaluates the reactions in Tissue's order |
+| `solvers` | `Stepper` protocol, `CashKarp`, `simulate` |
+| `legacy` | Slot numbering, `.init`, `.model` and solver files |
+| `output`, `cli`, `rand` | VTU/PVD writer, command line, glibc `rand()` |
 
 ## Tests and reference data
 

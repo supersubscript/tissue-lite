@@ -46,8 +46,9 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = [
-    "tissue_lite.mechanics.Boundary",
-    "tissue_lite.solver.CashKarp",
+    "tissue_lite.legacy.slots.SlotLayout",
+    "tissue_lite.material.Boundary",
+    "tissue_lite.solvers.cash_karp.CashKarp",
 ]
 
 [tool.ty.environment]

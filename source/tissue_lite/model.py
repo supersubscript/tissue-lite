@@ -4,46 +4,51 @@ Tissue evaluates its reactions in model-file order, and several of them write ce
 state as a side effect of computing derivatives. `ModelState` reproduces the order
 of every retained model file:
 
-- derivatives: TRBS forces, pressure, angle diagnostics, volume diagnostic,
-  boundary, vertex velocity;
-- per-step updates: fibres, TRBS stress/strain, pressure ramp, microtubules, growth.
+- forces: TRBS membrane, pressure, angle diagnostics, volume diagnostic, boundary,
+  vertex velocity;
+- per-step updates: fibres, cell stress and strain, pressure ramp, microtubules,
+  growth.
 """
 
 import logging
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
 
-import numba
 import numpy as np
-from numpy.typing import NDArray
 
-from tissue_lite import feedback, growth, layout, mechanics
-from tissue_lite.feedback import FibreStiffness, MicrotubuleAlignment
+from tissue_lite import diagnostics, feedback, forces, growth, stress
+from tissue_lite.arrays import BoolArray, FloatArray, IntArray
+from tissue_lite.feedback import (
+    FibreKernel,
+    FibreStiffness,
+    MicrotubuleAlignment,
+    MicrotubuleKernel,
+)
 from tissue_lite.growth import StrainGrowth
-from tissue_lite.mechanics import (
+from tissue_lite.material import (
     Boundary,
-    CellMechanics,
     ConcentrationSoftening,
-    MaterialArgs,
-    MaterialParameters,
+    Material,
     Pressure,
     TRBSMembrane,
-    Triangles,
 )
 from tissue_lite.rand import make_rand_state
 from tissue_lite.tissue import (
+    CellState,
     CentreTriangulation,
-    FloatArray,
-    IntArray,
     Tissue,
-    compute_cell_centroids,
+    initiate_triangulation,
+)
+from tissue_lite.triangles import (
+    RestLengths,
+    TriangleMesh,
+    build_rest_lengths,
+    build_triangle_mesh,
 )
 
 logger = logging.getLogger(__name__)
 
-type Layout = Literal["sweep", "growth"]
 type TomlValue = (
     bool | int | float | str | None | tuple[TomlValue, ...] | dict[str, TomlValue]
 )
@@ -53,10 +58,8 @@ type TomlValue = (
 class MeristemModel:
     """Everything that defines a simulation except the mesh and the solver.
 
-    `layout` selects where secondary stress and strain axes are stored ("growth"
-    stores them, overwriting the normal with the second stress axis, as Tissue's
-    growth models do). Without `track_velocity` the velocity slot keeps its initial
-    value, as in Tissue models lacking `Calculate::VertexVelocity`.
+    Without `track_velocity` the cell velocity keeps its initial value, as in
+    Tissue models lacking `Calculate::VertexVelocity`.
     """
 
     membrane: TRBSMembrane
@@ -66,7 +69,6 @@ class MeristemModel:
     microtubules: MicrotubuleAlignment | None = None
     growth: StrainGrowth | None = None
     track_velocity: bool = True
-    layout: Layout = "sweep"
 
     def __post_init__(self) -> None:
         if self.growth is not None and not self.membrane.double_rest_lengths:
@@ -90,7 +92,6 @@ class MeristemModel:
             else None,
             growth=StrainGrowth(**tables["growth"]) if "growth" in tables else None,
             track_velocity=tables.get("track_velocity", True),
-            layout=tables.get("layout", "sweep"),
         )
 
     def to_toml(self, path: Path) -> None:
@@ -130,78 +131,51 @@ def _toml_value(value: TomlValue) -> str:
     return str(value)
 
 
-def initiate_triangulation(tissue: Tissue, double: bool) -> CentreTriangulation:
-    """Creates the centre triangulation from scratch, as Tissue does without one stored.
-
-    Centres are the wall-length-weighted means of the wall midpoints; spoke rest
-    lengths are the current centre–vertex distances.
-    """
-    topo = tissue.topology
-    centres = compute_cell_centroids(tissue)
-    spoke = centres[topo.triangle_cells] - tissue.vertices[topo.cell_vertices]
-    distances = np.sqrt(
-        spoke[:, 0] * spoke[:, 0]
-        + spoke[:, 1] * spoke[:, 1]
-        + spoke[:, 2] * spoke[:, 2]
-    )
-    if not double:
-        return CentreTriangulation(centres=centres, spokes=distances)
-    return CentreTriangulation(
-        centres=centres,
-        spokes=np.repeat(distances, 2),
-        wall_extensions=np.zeros(len(distances)),
-    )
-
-
 @dataclass
 class ModelState:
     """A model bound to a tissue, with the hidden state Tissue's reactions carry.
 
-    The tissue is modified in place.
+    The tissue is modified in place. `fixed` marks the vertex components the
+    boundary holds still.
     """
 
     model: MeristemModel
     tissue: Tissue
-    rand_state: NDArray[np.int64] = field(default_factory=make_rand_state)
+    rand_state: IntArray = field(default_factory=make_rand_state)
     pressure_factor: float = 0.0
     rest_positions: FloatArray = field(init=False)
-    triangles: Triangles = field(init=False)
-    _material_args: MaterialArgs = field(init=False, repr=False)
-    _extensions: FloatArray = field(init=False, repr=False)  # empty if single
-    _fixed: tuple[IntArray, IntArray] = field(init=False, repr=False)
-    stress_tensor: FloatArray = field(init=False)
-    strain_tensor: FloatArray = field(init=False)
-    energy_isotropic: FloatArray = field(init=False)
-    mechanics_valid: bool = False
+    mesh: TriangleMesh = field(init=False)
+    rest: RestLengths = field(init=False, repr=False)
+    fixed: BoolArray = field(init=False, repr=False)
+    _material: Material = field(init=False, repr=False)
+    _fibres: FibreKernel | None = field(init=False, repr=False)
+    _microtubules: MicrotubuleKernel | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Initiates the reactions in Tissue's model-file order."""
         model, tissue = self.model, self.tissue
         membrane = model.membrane
-        n_cells = tissue.topology.num_cells
-        if tissue.cell_variables.shape[1] < layout.NORMAL_START + 3:
-            raise ValueError("Tissue needs at least 35 cell variables")
         if model.fibres is not None:
-            feedback.initiate_fibres(
-                model.fibres,
-                *model.fibres.get_moduli(membrane.young_matrix, membrane.young_fibre),
-                tissue.cell_variables,
-            )
+            feedback.initiate_fibres(model.fibres, membrane, tissue.cells)
         tissue.triangulation = initiate_triangulation(
             tissue, membrane.double_rest_lengths
         )
         if model.microtubules is not None:
-            feedback.initiate_microtubules(tissue.cell_variables)
+            feedback.initiate_microtubules(tissue.cells)
         self.rest_positions = tissue.vertices.copy()
-        self.triangles = Triangles.from_tissue(tissue, membrane.double_rest_lengths)
-        self._material_args = MaterialParameters.from_membrane(membrane).as_tuple()
-        ext = tissue.triangulation.wall_extensions
-        self._extensions = np.empty(0) if ext is None else ext
+        self.mesh = build_triangle_mesh(tissue.topology, membrane.double_rest_lengths)
+        self.rest = build_rest_lengths(tissue, tissue.triangulation)
+        self.fixed = np.zeros(tissue.vertices.shape, dtype=bool)
         edge = np.flatnonzero(tissue.topology.boundary)
-        self._fixed = np.ix_(edge, np.array(model.boundary.fixed_axes, dtype=np.int64))
-        self.stress_tensor = np.zeros((n_cells, 3, 3))
-        self.strain_tensor = np.zeros((n_cells, 3, 3))
-        self.energy_isotropic = np.zeros(n_cells)
+        axes = np.array(model.boundary.fixed_axes, dtype=np.int64)
+        self.fixed[np.ix_(edge, axes)] = True
+        self._material = membrane.to_kernel()
+        self._fibres = (
+            None if model.fibres is None else model.fibres.to_kernel(membrane)
+        )
+        self._microtubules = (
+            None if model.microtubules is None else model.microtubules.to_kernel()
+        )
 
     @property
     def triangulation(self) -> CentreTriangulation:
@@ -210,260 +184,77 @@ class ModelState:
             raise ValueError("Tissue has no centre triangulation")
         return self.tissue.triangulation
 
-    def compute_derivatives(
+    def compute_forces(
         self,
-        cell_vars: FloatArray,
+        cells: CellState,
         centres: FloatArray,
         vertices: FloatArray,
     ) -> tuple[FloatArray, FloatArray]:
-        """Returns (vertex, centre) derivatives; writes diagnostics into cell_vars."""
-        model = self.model
-        tri = self.triangles
-        topo = self.tissue.topology
-        vd = np.zeros_like(vertices)
-        cd = np.zeros_like(centres)
-        mechanics.compute_trbs_forces(
-            topo.offsets,
-            tri.v2,
-            tri.v3,
-            tri.wall,
-            tri.spoke_start,
-            tri.spoke_end,
-            topo.wall_vertices,
-            self.tissue.wall_lengths,
-            self.triangulation.spokes,
-            self._extensions,
+        """Returns the (vertex, centre) forces, which are the position derivatives.
+
+        Writes the diagnostics (angles, volume change, velocity) into `cells` and
+        zeroes the fixed boundary components.
+        """
+        vertex_forces = np.zeros_like(vertices)
+        centre_forces = np.zeros_like(centres)
+        forces.compute_trbs_forces(
+            self.mesh,
+            self.rest,
             centres,
-            cell_vars,
             vertices,
-            *self._material_args,
+            cells,
+            self._material,
             self.rand_state,
-            vd,
-            cd,
+            vertex_forces,
+            centre_forces,
         )
-        mechanics.compute_pressure_forces(
-            topo.offsets,
-            tri.v2,
-            tri.v3,
-            tri.wall,
-            topo.wall_vertices,
+        forces.compute_pressure_forces(
+            self.mesh,
             centres,
             vertices,
-            self.pressure_factor,
-            model.pressure.pressure,
-            vd,
-            cd,
+            self.pressure_factor * self.model.pressure.pressure,
+            vertex_forces,
+            centre_forces,
         )
-        _angle_diagnostic(
-            cell_vars,
-            layout.MICROTUBULE.start,
-            layout.STRESS_START,
-            layout.ANGLE_MT_STRESS,
+        diagnostics.update_angle_diagnostics(cells)
+        diagnostics.update_volume_change(
+            cells.volume_change, vertices, self.rest_positions, vertex_forces
         )
-        _angle_diagnostic(
-            cell_vars,
-            layout.STRESS_START,
-            layout.STRAIN_START,
-            layout.ANGLE_STRESS_STRAIN,
-        )
-        _volume_diagnostic(cell_vars, vertices, self.rest_positions, vd)
-        vd[self._fixed] = 0.0
-        if model.track_velocity:
-            _velocity_diagnostic(cell_vars, topo.offsets, topo.cell_vertices, vd)
-        return vd, cd
+        vertex_forces[self.fixed] = 0.0
+        if self.model.track_velocity:
+            diagnostics.update_cell_velocity(cells, self.mesh, vertex_forces)
+        return vertex_forces, centre_forces
 
     def update(self, h: float) -> None:
-        """Applies the per-step updates in Tissue's order."""
+        """Applies the per-step updates of length h in Tissue's order."""
         model, tissue = self.model, self.tissue
-        membrane = model.membrane
-        cell_vars = tissue.cell_variables
-        triangulation = self.triangulation
-        tri = self.triangles
-        topo = tissue.topology
-        if model.fibres is not None:
-            fibres = model.fibres
-            feedback.update_fibres(
-                cell_vars,
-                h,
-                fibres.rate,
-                feedback.COUPLING_CODES[fibres.coupling],
-                fibres.k_hill,
-                fibres.n_hill,
-                fibres.velocity_threshold,
-                *fibres.get_moduli(membrane.young_matrix, membrane.young_fibre),
-            )
-        mechanics.update_trbs(
-            topo.offsets,
-            tri.v2,
-            tri.v3,
-            tri.wall,
-            tri.spoke_start,
-            tri.spoke_end,
-            topo.wall_vertices,
-            tissue.wall_lengths,
-            triangulation.spokes,
-            self._extensions,
-            triangulation.centres,
-            cell_vars,
+        cells = tissue.cells
+        centres = self.triangulation.centres
+        if self._fibres is not None:
+            feedback.update_fibres(cells, h, self._fibres)
+        stress.update_cell_stress(
+            self.mesh,
+            self.rest,
+            centres,
             tissue.vertices,
-            *self._material_args,
-            model.layout == "growth",
+            cells,
+            self._material,
             self.rand_state,
-            self.stress_tensor,
-            self.strain_tensor,
-            self.energy_isotropic,
         )
-        self.mechanics_valid = True
         if self.pressure_factor < 1.0:
             self.pressure_factor += h / model.pressure.ramp_time
         if self.pressure_factor > 1.0:
             self.pressure_factor = 1.0
-        if model.microtubules is not None:
-            microtubules = model.microtubules
-            feedback.update_microtubules(
-                cell_vars, h, microtubules.rate, *microtubules.get_gate()
-            )
+        if self._microtubules is not None:
+            feedback.update_microtubules(cells, h, self._microtubules)
         if model.growth is not None:
             growth.update_growth(
-                topo.offsets,
-                tri.v2,
-                tri.v3,
-                tri.wall,
-                tri.spoke_start,
-                tri.spoke_end,
-                topo.wall_vertices,
-                tissue.wall_lengths,
-                triangulation.spokes,
-                self._extensions,
-                triangulation.centres,
-                cell_vars,
+                self.mesh,
+                self.rest,
+                centres,
                 tissue.vertices,
+                cells,
                 h,
                 model.growth.rate,
                 model.growth.threshold,
             )
-
-    def get_cell_mechanics(self) -> CellMechanics:
-        """Returns the stress and strain of the last update, with current slots.
-
-        Raises:
-            ValueError: If no update has run yet.
-        """
-        if not self.mechanics_valid:
-            raise ValueError("No update has computed the mechanics yet")
-        return build_cell_mechanics(
-            cell_vars=self.tissue.cell_variables,
-            stress_tensor=self.stress_tensor,
-            strain_tensor=self.strain_tensor,
-            energy_isotropic=self.energy_isotropic,
-            membrane=self.model.membrane,
-            layout_name=self.model.layout,
-        )
-
-
-def build_cell_mechanics(
-    cell_vars: FloatArray,
-    stress_tensor: FloatArray,
-    strain_tensor: FloatArray,
-    energy_isotropic: FloatArray,
-    membrane: TRBSMembrane,
-    layout_name: Layout,
-) -> CellMechanics:
-    """Collects the mechanics record from the cell-variable slots and tensors."""
-    v = cell_vars.copy()
-    growth_layout = layout_name == "growth"
-    nan3 = np.full((len(v), 3), np.nan)
-    nan1 = np.full(len(v), np.nan)
-    young_t = (
-        2 * membrane.young_matrix
-        + membrane.young_fibre
-        - v[:, layout.YOUNG_LONGITUDINAL]
-    )
-    return CellMechanics(
-        stress_tensor=stress_tensor.copy(),
-        strain_tensor=strain_tensor.copy(),
-        normal=nan3 if growth_layout else v[:, layout.NORMAL],
-        stress_direction=v[:, layout.STRESS_DIRECTION],
-        stress_max=v[:, layout.STRESS_MAX],
-        stress_direction_second=v[:, layout.STRESS_DIRECTION_SECOND]
-        if growth_layout
-        else nan3,
-        stress_second=v[:, layout.STRESS_SECOND] if growth_layout else nan1,
-        stress_anisotropy=v[:, layout.STRESS_ANISOTROPY],
-        von_mises_stress=v[:, layout.VON_MISES_STRESS],
-        strain_direction=v[:, layout.STRAIN_DIRECTION],
-        strain_max=v[:, layout.STRAIN_MAX],
-        strain_perpendicular=v[:, layout.STRAIN_PERPENDICULAR]
-        if growth_layout
-        else nan3,
-        strain_second=v[:, layout.STRAIN_SECOND] if growth_layout else nan1,
-        strain_anisotropy=v[:, layout.STRAIN_ANISOTROPY],
-        rest_area=v[:, layout.REST_AREA],
-        energy_isotropic=energy_isotropic.copy(),
-        energy_anisotropic=v[:, layout.YOUNG_TRANSVERSE],
-        young_transverse=young_t,
-    )
-
-
-@numba.njit(cache=True)
-def _angle_diagnostic(
-    cell_vars: FloatArray, first: int, second: int, store: int
-) -> None:
-    """Port of `Calculate::AngleVectors`: normalises both vectors in place."""
-    for c in range(cell_vars.shape[0]):
-        for start in (first, second):
-            x, y, z = (
-                cell_vars[c, start],
-                cell_vars[c, start + 1],
-                cell_vars[c, start + 2],
-            )
-            norm = np.sqrt(x * x + y * y + z * z)
-            if norm > 0:
-                for d in range(3):
-                    cell_vars[c, start + d] = cell_vars[c, start + d] / norm
-        dot = 0.0
-        for d in range(3):
-            dot += cell_vars[c, first + d] * cell_vars[c, second + d]
-        cell_vars[c, store] = abs(dot)
-
-
-@numba.njit(cache=True)
-def _volume_diagnostic(
-    cell_vars: FloatArray,
-    vertices: FloatArray,
-    rest_positions: FloatArray,
-    vd: FloatArray,
-) -> None:
-    """Port of `Calculate::TissueVolumeChange` (stores into cells 1, 2, 3)."""
-    change = 0.0
-    total = 0.0
-    for v in range(vertices.shape[0]):
-        dx = vertices[v, 0] - rest_positions[v, 0]
-        dy = vertices[v, 1] - rest_positions[v, 1]
-        dz = vertices[v, 2] - rest_positions[v, 2]
-        change += np.sqrt(dx * dx + dy * dy + dz * dz)
-        total += np.sqrt(
-            vd[v, 0] * vd[v, 0] + vd[v, 1] * vd[v, 1] + vd[v, 2] * vd[v, 2]
-        )
-    delta = change - cell_vars[1, layout.VOLUME_CHANGE]
-    cell_vars[1, layout.VOLUME_CHANGE] = change
-    cell_vars[2, layout.VOLUME_CHANGE] = delta
-    cell_vars[3, layout.VOLUME_CHANGE] = total
-
-
-@numba.njit(cache=True)
-def _velocity_diagnostic(
-    cell_vars: FloatArray,
-    offsets: IntArray,
-    cell_vertices: IntArray,
-    vd: FloatArray,
-) -> None:
-    """Port of `Calculate::VertexVelocity`: mean vertex speed per cell."""
-    for c in range(len(offsets) - 1):
-        total = 0.0
-        for k in range(offsets[c], offsets[c + 1]):
-            v = cell_vertices[k]
-            total += np.sqrt(
-                vd[v, 0] * vd[v, 0] + vd[v, 1] * vd[v, 1] + vd[v, 2] * vd[v, 2]
-            )
-        cell_vars[c, layout.VELOCITY] = total / (offsets[c + 1] - offsets[c])

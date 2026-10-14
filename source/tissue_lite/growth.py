@@ -2,8 +2,8 @@
 
 Ports `CenterTriangulation::WallGrowth::StrainTRBS` (double rest lengths) from Tissue
 e74e457, including its hard-coded inputs: the growth axis is the microtubule axis
-(cell variables 0-2) and the two compared values are cell variables 3 and 7 (the
-maximal stress). Its velocity threshold is read but never used by Tissue.
+and the two compared values are `growth_signal` and `stress_max`. Its velocity
+threshold is read but never used by Tissue.
 """
 
 from dataclasses import dataclass
@@ -11,8 +11,9 @@ from dataclasses import dataclass
 import numba
 import numpy as np
 
-from tissue_lite import layout
-from tissue_lite.tissue import FloatArray, IntArray
+from tissue_lite.arrays import FloatArray
+from tissue_lite.tissue import CellState
+from tissue_lite.triangles import RestLengths, TriangleMesh
 
 
 @dataclass(frozen=True)
@@ -25,34 +26,29 @@ class StrainGrowth:
 
 @numba.njit(cache=True)
 def update_growth(
-    offsets: IntArray,
-    tri_v2: IntArray,
-    tri_v3: IntArray,
-    tri_wall: IntArray,
-    spoke_start: IntArray,
-    spoke_end: IntArray,
-    wall_vertices: IntArray,
-    wall_lengths: FloatArray,
-    spokes: FloatArray,
-    extensions: FloatArray,
+    mesh: TriangleMesh,
+    rest: RestLengths,
     centres: FloatArray,
-    cell_vars: FloatArray,
-    x: FloatArray,
+    vertices: FloatArray,
+    cells: CellState,
     h: float,
     rate: float,
     threshold: float,
 ) -> None:
     """Applies one explicit growth update of length h to the double rest lengths."""
+    offsets, tri_v2, tri_v3, tri_wall, spoke_start, spoke_end, wall_vertices = mesh
+    spokes, wall_lengths, extensions = rest
+    x = vertices
     comp = np.empty((3, 2))
     for c in range(offsets.shape[0] - 1):
         start = offsets[c]
         n_walls = offsets[c + 1] - start
-        cell_vars[c, layout.GROWTH_COUNT] = 0
-        g1 = cell_vars[c, layout.GROWTH_VALUE_1]
-        g2 = cell_vars[c, layout.STRESS_MAX]
-        gg0 = cell_vars[c, layout.MICROTUBULE_START]
-        gg1 = cell_vars[c, layout.MICROTUBULE_START + 1]
-        gg2 = cell_vars[c, layout.MICROTUBULE_START + 2]
+        cells.growth_count[c] = 0
+        g1 = cells.growth_signal[c]
+        g2 = cells.stress_max[c]
+        gg0 = cells.microtubule[c, 0]
+        gg1 = cells.microtubule[c, 1]
+        gg2 = cells.microtubule[c, 2]
         for k in range(n_walls):
             t = start + k
             i2 = tri_v2[t]
@@ -133,17 +129,17 @@ def update_growth(
                 comp[j, 0] = rests[j] * cos_t
                 comp[j, 1] = rests[j] * sin_t
             if g1 > threshold and g2 < threshold:
-                cell_vars[c, layout.GROWTH_COUNT] += 1
+                cells.growth_count[c] += 1
                 f1 = rate * h * (g1 - threshold)
                 for j in range(3):
                     comp[j, 0] += comp[j, 0] * f1
             if g1 < threshold and g2 > threshold:
-                cell_vars[c, layout.GROWTH_COUNT] += 1
+                cells.growth_count[c] += 1
                 f2 = rate * h * (g2 - threshold)
                 for j in range(3):
                     comp[j, 1] += comp[j, 1] * f2
             if g1 > threshold and g2 > threshold:
-                cell_vars[c, layout.GROWTH_COUNT] += 2
+                cells.growth_count[c] += 2
                 f1 = rate * h * (g1 - threshold)
                 f2 = rate * h * (g2 - threshold)
                 for j in range(3):

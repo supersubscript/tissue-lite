@@ -21,8 +21,9 @@ from pathlib import Path
 
 import click
 import numpy as np
-from cut_patch import resize_cell_variables
+from cut_patch import RAW_LAYOUT, resize_cell_variables
 
+from tissue_lite.legacy.init_file import read_init, write_init
 from tissue_lite.tissue import Tissue
 
 logger = logging.getLogger(__name__)
@@ -191,13 +192,13 @@ def make_solver_text(case: Case) -> str:
 def make_input_tissue(case: Case) -> Tissue:
     """Loads the case's input state and adapts it to the model's variable count."""
     if case.init.startswith("case:"):
-        tissue = Tissue.read_init(CASES_DIR / case.init[5:] / "final.init")
+        tissue = read_init(CASES_DIR / case.init[5:] / "final.init")
     else:
-        tissue = Tissue.read_init(MESHES_DIR / f"{case.init}.init")
-    tissue.cell_variables = resize_cell_variables(tissue.cell_variables, case.n_vars)
+        tissue = read_init(MESHES_DIR / f"{case.init}.init")
+    values = resize_cell_variables(RAW_LAYOUT.to_cell_variables(tissue), case.n_vars)
     if case.concentration:
-        ramp = np.linspace(0.0, 1.0, len(tissue.cell_variables))
-        tissue.cell_variables[:, CONCENTRATION_INDEX] = ramp
+        values[:, CONCENTRATION_INDEX] = np.linspace(0.0, 1.0, len(values))
+    tissue.cells = RAW_LAYOUT.from_cell_variables(values)
     return tissue.without_triangulation()
 
 
@@ -214,7 +215,7 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
         text = text.replace(old, new, 1)
     (out / "model.model").write_text(text)
     (out / "solver.rk5").write_text(make_solver_text(case))
-    make_input_tissue(case).write_init(out / "input.init")
+    write_init(make_input_tissue(case), out / "input.init")
     command = [
         str(simulator),
         "model.model",

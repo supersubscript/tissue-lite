@@ -1,14 +1,13 @@
-"""Readers for Tissue's `.model` and `.rk5` files, limited to the retained reactions.
+"""Reader for Tissue's `.model` files, limited to the retained reactions.
 
 Anything outside the retained subset, or using cell-variable slots other than the
-ones in `layout`, is rejected rather than silently reinterpreted.
+ones in `legacy.slots`, is rejected rather than silently reinterpreted.
 """
 
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from tissue_lite import layout
 from tissue_lite.feedback import (
     COUPLING_CODES,
     FibreStiffness,
@@ -16,14 +15,15 @@ from tissue_lite.feedback import (
     MicrotubuleAlignment,
 )
 from tissue_lite.growth import StrainGrowth
-from tissue_lite.mechanics import (
+from tissue_lite.legacy import slots
+from tissue_lite.legacy.slots import SlotLayout
+from tissue_lite.material import (
     Boundary,
     ConcentrationSoftening,
     Pressure,
     TRBSMembrane,
 )
-from tissue_lite.model import Layout, MeristemModel
-from tissue_lite.solver import CashKarp
+from tissue_lite.model import MeristemModel
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,33 @@ _REQUIRED = {
     "TemplateVolumeChange",
     "VertexNoUpdateBoundary",
 }
-_VTU_PRINT_FLAG = 2
 _IGNORED_DIRECTIONS = {"StaticDirection", "ParallellDirection"}
 _FIBRE_CODES = {code: name for name, code in COUPLING_CODES.items()}
 _INITIALISE: dict[int, Initialisation] = {0: "none", 1: "isotropic", 2: "anisotropic"}
+
+# TRBS level-0 indices: rest length, MT, strain and stress anisotropy, rest area,
+# iso and aniso energy, longitudinal modulus, von Mises stress, stress tensor, normal.
+_TRBS_LEVEL0 = [
+    0,
+    slots.MICROTUBULE.start,
+    slots.STRAIN_ANISOTROPY,
+    slots.STRESS_ANISOTROPY,
+    slots.REST_AREA,
+    slots.YOUNG_TRANSVERSE,
+    slots.YOUNG_TRANSVERSE,
+    slots.YOUNG_LONGITUDINAL,
+    slots.VON_MISES_STRESS,
+    slots.STRESS_TENSOR_START,
+    slots.NORMAL.start,
+]
+# Where TRBS stores principal strain and stress axes: (strain starts, stress starts).
+_STORAGE = {
+    False: ([slots.STRAIN_DIRECTION.start], [slots.STRESS_DIRECTION.start]),
+    True: (
+        [slots.STRAIN_DIRECTION.start, slots.STRAIN_PERPENDICULAR.start],
+        [slots.STRESS_DIRECTION.start, slots.STRESS_DIRECTION_SECOND.start],
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -64,14 +87,11 @@ class Reaction:
 
 
 @dataclass(frozen=True)
-class SolverFile:
-    """Contents of an RK5Adaptive solver file."""
+class LegacyModel:
+    """A model file's content: the model and the slot numbering it addresses."""
 
-    solver: CashKarp
-    t_start: float
-    t_end: float
-    n_frames: int
-    print_flag: int
+    model: MeristemModel
+    layout: SlotLayout
 
 
 def _split_tokens(text: str) -> list[str]:
@@ -113,8 +133,8 @@ def parse_reactions(text: str) -> list[Reaction]:
     return reactions[:n_reactions]
 
 
-def read_model_file(path: Path) -> MeristemModel:
-    """Reads a Tissue model file into a `MeristemModel`.
+def read_model_file(path: Path) -> LegacyModel:
+    """Reads a Tissue model file.
 
     Raises:
         ValueError: If it uses anything outside the retained subset.
@@ -122,12 +142,12 @@ def read_model_file(path: Path) -> MeristemModel:
     return build_model(parse_reactions(path.read_text()))
 
 
-def build_model(reactions: list[Reaction]) -> MeristemModel:
-    """Maps retained Tissue reactions onto a `MeristemModel`."""
+def build_model(reactions: list[Reaction]) -> LegacyModel:
+    """Maps retained Tissue reactions onto a `MeristemModel` and its slot layout."""
     _validate_order([r.name for r in reactions])
     by_name = {r.name: r for r in reactions}
     trbs = by_name["VertexFromTRBScenterTriangulationMT"]
-    membrane, model_layout, com = _parse_membrane(trbs)
+    membrane, layout, com = _parse_membrane(trbs)
     initiate = by_name["CenterTriangulation::Initiate"]
     double = len(initiate.parameters) == 2 and initiate.parameters[1] == 1
     if double != membrane.double_rest_lengths:
@@ -135,10 +155,10 @@ def build_model(reactions: list[Reaction]) -> MeristemModel:
     if initiate.indices != [[com]]:
         raise ValueError("Initiate and TRBS centre indices disagree")
     _validate_angles([r for r in reactions if r.name == "CalculateAngleVectors"])
-    volume = [1, layout.VOLUME_CHANGE, 2, layout.VOLUME_CHANGE, 3, layout.VOLUME_CHANGE]
+    volume = [1, slots.VOLUME_CHANGE, 2, slots.VOLUME_CHANGE, 3, slots.VOLUME_CHANGE]
     if by_name["TemplateVolumeChange"].indices != [volume]:
         raise ValueError("TemplateVolumeChange must store into cells 1-3, slot 25")
-    return MeristemModel(
+    model = MeristemModel(
         membrane=membrane,
         pressure=_parse_pressure(
             by_name["Pressure3D::CenterTriangulation::Linear"], com
@@ -156,8 +176,8 @@ def build_model(reactions: list[Reaction]) -> MeristemModel:
         if "CenterTriangulation::WallGrowth::StrainTRBS" in by_name
         else None,
         track_velocity=_has_velocity(by_name.get("Calculate::VertexVelocity")),
-        layout=model_layout,
     )
+    return LegacyModel(model=model, layout=layout)
 
 
 def _validate_order(names: list[str]) -> None:
@@ -175,8 +195,8 @@ def _validate_order(names: list[str]) -> None:
         raise ValueError(f"Reactions are not in the supported order: {names}")
 
 
-def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
-    """Returns the membrane, the output layout and the centre index."""
+def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
+    """Returns the membrane, the slot layout and the centre index."""
     p = r.parameters
     if len(p) not in (11, 13):
         raise ValueError("TRBS-MT needs 11 parameters (13 for MF=10)")
@@ -191,21 +211,20 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
         raise ValueError("TRBS-MT needs four index levels")
     level0 = r.indices[0]
     softening = None
+    concentration_slot = None
     if mf == 10:
         if len(level0) != 12:
             raise ValueError("MF=10 needs a 12th level-0 index (the concentration)")
         # Tissue reads K and n from p9 and p10, not from p11 and p12 (KNOWN_ISSUES).
-        softening = ConcentrationSoftening(
-            concentration_index=level0[11], k_hill=p[9], n_hill=p[10]
-        )
+        softening = ConcentrationSoftening(k_hill=p[9], n_hill=p[10])
+        concentration_slot = level0[11]
         level0 = level0[:11]
-    if level0 != layout.TRBS_LEVEL0:
-        raise ValueError(f"TRBS-MT level-0 indices must be {layout.TRBS_LEVEL0}")
+    if level0 != _TRBS_LEVEL0:
+        raise ValueError(f"TRBS-MT level-0 indices must be {_TRBS_LEVEL0}")
     storage = (r.indices[2], r.indices[3])
-    found = [name for name, value in layout.STORAGE.items() if value == storage]
+    found = [second for second, value in _STORAGE.items() if value == storage]
     if not found:
-        raise ValueError(f"Strain/stress storage must be one of {layout.STORAGE}")
-    model_layout: Layout = "growth" if found[0] == "growth" else "sweep"
+        raise ValueError(f"Strain/stress storage must be one of {_STORAGE}")
     membrane = TRBSMembrane(
         young_matrix=p[0],
         young_fibre=p[1],
@@ -214,7 +233,8 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
         double_rest_lengths=p[10] == 1,
         softening=softening,
     )
-    return membrane, model_layout, r.indices[1][0]
+    layout = SlotLayout(second_axes=found[0], concentration_slot=concentration_slot)
+    return membrane, layout, r.indices[1][0]
 
 
 def _parse_pressure(r: Reaction, com: int) -> Pressure:
@@ -244,9 +264,9 @@ def _parse_fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
         logger.warning(
             "FiberModel moduli (%g, %g) differ from the TRBS ones", p[5], p[6]
         )
-    if r.indices[0] != [layout.STRESS_ANISOTROPY] or r.indices[2] != [layout.VELOCITY]:
+    if r.indices[0] != [slots.STRESS_ANISOTROPY] or r.indices[2] != [slots.VELOCITY]:
         raise ValueError("FiberModel must read slots 18 and 22")
-    if r.indices[1][0] != layout.YOUNG_LONGITUDINAL:
+    if r.indices[1][0] != slots.YOUNG_LONGITUDINAL:
         raise ValueError("FiberModel must write slot 16")
     if int(p[2]) not in _FIBRE_CODES or int(p[7]) not in _INITIALISE:
         raise ValueError("Unknown FiberModel coupling or initialisation flag")
@@ -266,10 +286,10 @@ def _parse_microtubules(r: Reaction) -> MicrotubuleAlignment:
     """Maps UpdateMTDirectionEquilibrium; absent parameters disable its gates."""
     p = r.parameters
     expected = [
-        [layout.STRESS_START],
-        [layout.MICROTUBULE_START],
-        [layout.VELOCITY],
-        [layout.STRESS_MAX, layout.VON_MISES_STRESS],
+        [slots.STRESS_DIRECTION.start],
+        [slots.MICROTUBULE.start],
+        [slots.VELOCITY],
+        [slots.STRESS_MAX, slots.VON_MISES_STRESS],
     ][: len(r.indices)]
     if r.indices != expected or len(r.indices) < 2:
         raise ValueError(f"UpdateMTDirectionEquilibrium indices must be {expected}")
@@ -287,7 +307,7 @@ def _parse_growth(r: Reaction, com: int) -> StrainGrowth:
     p = r.parameters
     if len(p) != 4 or p[3] != 1:
         raise ValueError("StrainTRBS growth needs four parameters with p3=1")
-    if r.indices != [[0], [com], [layout.VELOCITY]]:
+    if r.indices != [[0], [com], [slots.VELOCITY]]:
         raise ValueError("StrainTRBS indices must be [0], [centre], [22]")
     logger.debug("StrainTRBS velocity threshold %g is unused, as in Tissue", p[2])
     return StrainGrowth(rate=p[0], threshold=p[1])
@@ -297,7 +317,7 @@ def _has_velocity(r: Reaction | None) -> bool:
     """Whether the model tracks vertex velocity (in slot 22 only)."""
     if r is None:
         return False
-    if r.indices != [[layout.VELOCITY]]:
+    if r.indices != [[slots.VELOCITY]]:
         raise ValueError("Calculate::VertexVelocity must store into slot 22")
     return True
 
@@ -305,29 +325,14 @@ def _has_velocity(r: Reaction | None) -> bool:
 def _validate_angles(angles: list[Reaction]) -> None:
     """Checks both CalculateAngleVectors use the standard slots."""
     expected = [
-        [[layout.MICROTUBULE_START, layout.STRESS_START], [layout.ANGLE_MT_STRESS]],
-        [[layout.STRESS_START, layout.STRAIN_START], [layout.ANGLE_STRESS_STRAIN]],
+        [
+            [slots.MICROTUBULE.start, slots.STRESS_DIRECTION.start],
+            [slots.ANGLE_MT_STRESS],
+        ],
+        [
+            [slots.STRESS_DIRECTION.start, slots.STRAIN_DIRECTION.start],
+            [slots.ANGLE_STRESS_STRAIN],
+        ],
     ]
     if [a.indices for a in angles] != expected:
         raise ValueError(f"CalculateAngleVectors indices must be {expected}")
-
-
-def read_solver_file(path: Path) -> SolverFile:
-    """Reads an RK5Adaptive solver file.
-
-    Raises:
-        ValueError: If it names another solver.
-    """
-    tokens = _split_tokens(path.read_text())
-    if not tokens or tokens[0] != "RK5Adaptive":
-        raise ValueError("Only RK5Adaptive solver files are supported")
-    t_start, t_end, flag, n_print, h1, eps = tokens[1:7]
-    if int(flag) != _VTU_PRINT_FLAG:
-        logger.warning("Print flag %s is not supported; output is VTU (flag 2)", flag)
-    return SolverFile(
-        solver=CashKarp(max_step=float(h1), tolerance=float(eps)),
-        t_start=float(t_start),
-        t_end=float(t_end),
-        n_frames=int(n_print),
-        print_flag=int(flag),
-    )

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from conftest import CASES, CASES_DIR, CaseRunner
 
-from tissue_lite.legacy import read_solver_file
+from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.output import format_pvd
 
 _NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?|[-+]?(inf|nan)")

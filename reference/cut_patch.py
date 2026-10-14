@@ -13,13 +13,13 @@ from pathlib import Path
 
 import numpy as np
 
-from tissue_lite.tissue import (
-    BACKGROUND,
-    FloatArray,
-    Tissue,
-    build_topology,
-    compute_cell_centroids,
-)
+from tissue_lite.arrays import FloatArray
+from tissue_lite.legacy.init_file import read_init, write_init
+from tissue_lite.legacy.slots import SlotLayout
+from tissue_lite.tissue import Tissue, compute_cell_centroids
+from tissue_lite.topology import BACKGROUND, build_topology
+
+RAW_LAYOUT = SlotLayout()  # every column round-trips, most of them through `extra`
 
 
 def cut_patch(tissue: Tissue, n_cells: int) -> Tissue:
@@ -61,7 +61,9 @@ def cut_patch(tissue: Tissue, n_cells: int) -> Tissue:
         vertices=tissue.vertices[verts].copy(),
         wall_lengths=tissue.wall_lengths[walls].copy(),
         wall_variables=tissue.wall_variables[walls].copy(),
-        cell_variables=tissue.cell_variables[keep].copy(),
+        cells=RAW_LAYOUT.from_cell_variables(
+            RAW_LAYOUT.to_cell_variables(tissue)[keep]
+        ),
     )
 
 
@@ -75,12 +77,12 @@ def resize_cell_variables(cell_vars: FloatArray, n_vars: int) -> FloatArray:
 def main() -> None:
     """Cuts the patch given on the command line (see the module docstring)."""
     mesh, n_cells, out = Path(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3])
-    patch = cut_patch(Tissue.read_init(mesh), n_cells)
+    patch = cut_patch(read_init(mesh), n_cells)
     if len(sys.argv) > 4:
-        patch.cell_variables = resize_cell_variables(
-            patch.cell_variables, int(sys.argv[4])
+        patch.cells = RAW_LAYOUT.from_cell_variables(
+            resize_cell_variables(RAW_LAYOUT.to_cell_variables(patch), int(sys.argv[4]))
         )
-    patch.write_init(out)
+    write_init(patch, out)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,10 @@
 
 import pytest
 
-from tissue_lite.mechanics import (
+from tissue_lite.material import (
     Boundary,
     ConcentrationSoftening,
-    MaterialParameters,
+    Material,
     Pressure,
     TRBSMembrane,
 )
@@ -31,15 +31,15 @@ def test_boundary_rejects_axes() -> None:
 @pytest.mark.parametrize(
     ("softening", "expected"),
     [
-        (None, (1.0, 2.0, 0.2, 0.3, True, False, 0, 0.0, 0.0)),
+        (None, Material(1.0, 2.0, 0.2, 0.3, True, False, 0.0, 0.0)),
         (
-            ConcentrationSoftening(41, 2.0, 3.0),
-            (1.0, 2.0, 0.2, 0.3, True, True, 41, 2.0, 3.0),
+            ConcentrationSoftening(2.0, 3.0),
+            Material(1.0, 2.0, 0.2, 0.3, True, True, 2.0, 3.0),
         ),
     ],
 )
-def test_material_parameters_flatten(
-    softening: ConcentrationSoftening | None, expected: tuple
+def test_membrane_flattens_for_kernels(
+    softening: ConcentrationSoftening | None, expected: Material
 ) -> None:
     membrane = TRBSMembrane(1.0, 2.0, 0.2, 0.3, True, softening)
-    assert MaterialParameters.from_membrane(membrane).as_tuple() == expected
+    assert membrane.to_kernel() == expected

@@ -3,11 +3,10 @@
 from pathlib import Path
 
 from click.testing import CliRunner
-from conftest import CASES_DIR, assert_tissues_close
+from conftest import CASES_DIR, assert_tissues_close, read_case_model, read_case_tissue
 
 from tissue_lite.cli import main
-from tissue_lite.legacy import read_model_file
-from tissue_lite.tissue import Tissue
+from tissue_lite.legacy.init_file import read_init
 
 
 def _args(case: Path) -> list[str]:
@@ -31,7 +30,7 @@ def test_tissue_style_options(tmp_path: Path) -> None:
 def test_toml_model(tmp_path: Path) -> None:
     case = CASES_DIR / "sweep_pre"
     toml = tmp_path / "model.toml"
-    read_model_file(case / "model.model").to_toml(toml)
+    read_case_model(case).model.to_toml(toml)
     out = tmp_path / "final.init"
     result = CliRunner().invoke(
         main,
@@ -46,7 +45,18 @@ def test_toml_model(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    assert_tissues_close(Tissue.read_init(out), Tissue.read_init(case / "final.init"))
+    assert_tissues_close(read_init(out), read_case_tissue(case, "final.init"))
+
+
+def test_toml_softening_needs_concentration_slot(tmp_path: Path) -> None:
+    case = CASES_DIR / "auxin_softening"
+    toml = tmp_path / "model.toml"
+    read_case_model(case).model.to_toml(toml)
+    result = CliRunner().invoke(
+        main, [str(toml), str(case / "input.init"), str(case / "solver.rk5")]
+    )
+    assert result.exit_code != 0
+    assert "concentration-slot" in result.output
 
 
 def test_missing_file_fails() -> None:

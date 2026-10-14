@@ -3,27 +3,29 @@
 import numpy as np
 import pytest
 
-from tissue_lite import layout
 from tissue_lite.feedback import (
-    COUPLING_CODES,
     Coupling,
     FibreStiffness,
     MicrotubuleAlignment,
+    MicrotubuleKernel,
     initiate_fibres,
     initiate_microtubules,
     update_fibres,
     update_microtubules,
 )
+from tissue_lite.material import TRBSMembrane
+from tissue_lite.tissue import CellState
 
 YM, YF = 120.0, 120.0
+MEMBRANE = TRBSMembrane(YM, YF)
 
 
-def _cells(anisotropy: float, velocity: float = 0.0) -> np.ndarray:
-    v = np.zeros((1, 35))
-    v[0, layout.STRESS_ANISOTROPY] = anisotropy
-    v[0, layout.VELOCITY] = velocity
-    v[0, layout.YOUNG_LONGITUDINAL] = YM
-    return v
+def _cells(anisotropy: float, velocity: float = 0.0) -> CellState:
+    cells = CellState.zeros(1)
+    cells.stress_anisotropy[0] = anisotropy
+    cells.velocity[0] = velocity
+    cells.young_longitudinal[0] = YM
+    return cells
 
 
 @pytest.mark.parametrize(
@@ -37,46 +39,47 @@ def _cells(anisotropy: float, velocity: float = 0.0) -> np.ndarray:
 def test_fibre_initiation_targets(
     coupling: Coupling, anisotropy: float, target: float
 ) -> None:
-    v = _cells(anisotropy)
-    initiate_fibres(FibreStiffness(rate=1.0, coupling=coupling), YM, YF, v)
-    assert v[0, layout.YOUNG_LONGITUDINAL] == pytest.approx(target)
+    cells = _cells(anisotropy)
+    initiate_fibres(FibreStiffness(rate=1.0, coupling=coupling), MEMBRANE, cells)
+    assert cells.young_longitudinal[0] == pytest.approx(target)
 
 
 def test_fibre_update_relaxes_towards_target() -> None:
-    v = _cells(0.5)
-    update_fibres(v, 0.1, 1.0, COUPLING_CODES["linear"], 0.4, 2.0, 300.0, YM, YF)
-    assert v[0, layout.YOUNG_LONGITUDINAL] == pytest.approx(YM + 0.1 * 0.75 * YF)
+    cells = _cells(0.5)
+    fibres = FibreStiffness(rate=1.0, coupling="linear").to_kernel(MEMBRANE)
+    update_fibres(cells, 0.1, fibres)
+    assert cells.young_longitudinal[0] == pytest.approx(YM + 0.1 * 0.75 * YF)
 
 
 def test_fibre_update_is_gated_by_velocity() -> None:
-    v = _cells(0.5, velocity=500.0)
-    update_fibres(v, 0.1, 1.0, COUPLING_CODES["linear"], 0.4, 2.0, 300.0, YM, YF)
-    assert v[0, layout.YOUNG_LONGITUDINAL] == YM
+    cells = _cells(0.5, velocity=500.0)
+    fibres = FibreStiffness(rate=1.0, coupling="linear").to_kernel(MEMBRANE)
+    update_fibres(cells, 0.1, fibres)
+    assert cells.young_longitudinal[0] == YM
 
 
 def test_hill_direct_sets_modulus_without_matrix() -> None:
-    v = _cells(2 / 7, velocity=500.0)
-    update_fibres(v, 0.1, 1.0, COUPLING_CODES["hill_direct"], 0.4, 2.0, 300.0, YM, YF)
-    assert v[0, layout.YOUNG_LONGITUDINAL] == pytest.approx(0.75 * YF)
+    cells = _cells(2 / 7, velocity=500.0)
+    fibres = FibreStiffness(rate=1.0, coupling="hill_direct").to_kernel(MEMBRANE)
+    update_fibres(cells, 0.1, fibres)
+    assert cells.young_longitudinal[0] == pytest.approx(0.75 * YF)
 
 
 def test_microtubules_rotate_towards_stress_and_stay_unit() -> None:
-    v = np.zeros((1, 35))
-    v[0, layout.STRESS_DIRECTION] = (0.0, 1.0, 0.0)
-    v[0, layout.MICROTUBULE] = (-1.0, 0.0, 0.0)
-    update_microtubules(v, 0.5, 1.0, 0, 300.0, 0.0)
-    mt = v[0, layout.MICROTUBULE]
+    cells = CellState.zeros(1)
+    cells.stress_direction[0] = (0.0, 1.0, 0.0)
+    cells.microtubule[0] = (-1.0, 0.0, 0.0)
+    update_microtubules(cells, 0.5, MicrotubuleKernel(1.0, 0, 300.0, 0.0))
+    mt = cells.microtubule[0]
     np.testing.assert_allclose(np.linalg.norm(mt), 1.0)
     assert mt[1] > 0 and mt[0] < 0
 
 
 def test_microtubules_initiate_from_stress() -> None:
-    v = np.zeros((2, 35))
-    v[:, layout.STRESS_DIRECTION] = (0.0, 0.0, 1.0)
-    initiate_microtubules(v)
-    np.testing.assert_array_equal(
-        v[:, layout.MICROTUBULE], v[:, layout.STRESS_DIRECTION]
-    )
+    cells = CellState.zeros(2)
+    cells.stress_direction[:] = (0.0, 0.0, 1.0)
+    initiate_microtubules(cells)
+    np.testing.assert_array_equal(cells.microtubule, cells.stress_direction)
 
 
 def test_stress_threshold_needs_velocity_threshold() -> None:
@@ -84,6 +87,32 @@ def test_stress_threshold_needs_velocity_threshold() -> None:
         MicrotubuleAlignment(rate=1.0, velocity_threshold=None)
 
 
+@pytest.mark.parametrize(
+    ("alignment", "expected"),
+    [
+        (MicrotubuleAlignment(rate=1.0), MicrotubuleKernel(1.0, 2, 300.0, 0.0)),
+        (
+            MicrotubuleAlignment(rate=1.0, stress_difference_threshold=None),
+            MicrotubuleKernel(1.0, 1, 300.0, 0.0),
+        ),
+        (
+            MicrotubuleAlignment(
+                rate=1.0, velocity_threshold=None, stress_difference_threshold=None
+            ),
+            MicrotubuleKernel(1.0, 0, 0.0, 0.0),
+        ),
+    ],
+)
+def test_microtubule_gate_levels(
+    alignment: MicrotubuleAlignment, expected: MicrotubuleKernel
+) -> None:
+    assert alignment.to_kernel() == expected
+
+
 def test_fibre_moduli_fall_back_to_membrane() -> None:
-    assert FibreStiffness(rate=1.0).get_moduli(1.0, 2.0) == (1.0, 2.0)
-    assert FibreStiffness(rate=1.0, young_matrix=5.0).get_moduli(1.0, 2.0) == (5.0, 2.0)
+    membrane = TRBSMembrane(1.0, 2.0)
+    assert FibreStiffness(rate=1.0).get_moduli(membrane) == (1.0, 2.0)
+    assert FibreStiffness(rate=1.0, young_matrix=5.0).get_moduli(membrane) == (
+        5.0,
+        2.0,
+    )

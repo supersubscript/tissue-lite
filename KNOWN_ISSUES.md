@@ -2,7 +2,7 @@
 
 tissue-lite reproduces Tissue e74e457 as-is, so every item below is **kept on purpose** and logged for a later, deliberate fix. ✔ marks items exercised by the regression data (fixing one fails the suite); the others come from code reading. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`).
 
-## Solver (`solver.py`, Tissue `rungeKutta.cc`)
+## Solver (`solvers/cash_karp.py`, Tissue `rungeKutta.cc`)
 
 | # | Issue | Tissue source | Effect |
 |---|---|---|---|
@@ -16,7 +16,7 @@ tissue-lite reproduces Tissue e74e457 as-is, so every item below is **kept on pu
 
 The solver replacement (quasi-static Newton, compared against an implicit stiff integrator) is tracked as a separate issue.
 
-## TRBS membrane (`mechanics.py`, Tissue `mechanicalTRBS.cc`, `VertexFromTRBScenterTriangulationMT`)
+## TRBS membrane (`forces.py`, `stress.py`, Tissue `mechanicalTRBS.cc`, `VertexFromTRBScenterTriangulationMT`)
 
 | # | Issue | Tissue source | Effect |
 |---|---|---|---|
@@ -26,9 +26,9 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 | T4 | The stress Jacobi eigen loop applies one extra rotation (pivot recomputed at the loop top) and loses the rotation sign; the strain loop does not. | `:5529` | Eigenvector signs and, rarely, the selected axis differ from `numpy.linalg.eigh`. |
 | T5 | Principal stress is selected by |value| here but signed in the (dead) neighbour branch. | `:5606` vs `:6365` | Compressive strain can be reported as the maximum. |
 | T6 | Update's isotropic stress uses SVK λT, μT while forces come from biquadratic springs; the anisotropic part uses equipartition, not Delingette's 2Δμ. | `:4275` | Reported stresses are not exactly those of the force model. |
-| T7 | Var 20 holds Y_T in `derivs` and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is always Y_T. | index layout | The isotropic energy is never kept (`CellMechanics.energy_isotropic` exposes it). |
+| T7 | Var 20 holds Y_T in `derivs` and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is always Y_T. | index layout | The isotropic energy is never kept (`CellState.energy_isotropic` exposes it). |
 | T8 | Var 19 ("area ratio" in model files) is the total rest area. | `update` | Mislabelled output. |
-| T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth runs (`CellMechanics.normal` is NaN there). |
+| T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth-layout files; `CellState.normal` keeps them and `SlotLayout(second_axes=True)` reproduces the overwrite on output. |
 | T10 | Var 21 ("MT stress") is the von Mises stress √(s1² + s2² − s1 s2). | `update` | Mislabelled output. |
 | T11 | Header documents p10 as "unused"; it selects double rest lengths (p10 == 1). | constructor | Misleading model files. |
 
@@ -68,7 +68,7 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 
 | # | Issue | Effect |
 |---|---|---|
-| L1 | All state lives in magic cell-variable slots, some hard-coded (3, 7, 22, 25, 30) and some from model files. | The legacy reader accepts only the layouts used by the project (`layout.py`) and rejects others. |
+| L1 | All state lives in magic cell-variable slots, some hard-coded (3, 7, 22, 25, 30) and some from model files. | The legacy reader accepts only the layouts used by the project (`legacy/slots.py`) and rejects others. |
 | L2 | `TemplateVolumeChange` stores into cells 1–3 of var 25 (cells, not variables), with the total derivative taken before boundary zeroing. | Needs at least four cells; mixes per-tissue scalars into per-cell data. |
 | L3 | `StaticDirection` / `ParallellDirection` are no-ops without division. | Ignored by the reader. |
 | L4 | Print flags other than 2 (VTU) are not supported; `models/*` use flag 6 (PLY). | The CLI warns and writes VTU. |
@@ -77,5 +77,5 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 
 | # | Issue |
 |---|---|
-| X1 | `CellMechanics.young_transverse` uses 2Y_m + Y_f − Y_L and ignores concentration softening. |
+| X1 | `CellState.young_transverse` is the (softened) 2Y_m + Y_f − Y_L the force kernel last used. The `.init` and VTU writers put it in slot 20, or the anisotropic energy for softening models (C3). This matches Tissue for every printed frame and final state except a run with n_frames = 0 and no softening, where Tissue's final state holds the energy from the last `update`. |
 | X2 | Results are bit-identical to Tissue on the reference platform (x86-64, glibc 2.39); other libm versions may differ in the last bits of `pow`, `acos`, `cos` and `sin`, hence the tolerances in the tests. |
