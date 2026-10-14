@@ -17,8 +17,6 @@ from tissue_lite.tissue import Tissue
 
 logger = logging.getLogger(__name__)
 
-_VTU_PRINT_FLAG = 2
-
 _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
 
 
@@ -60,11 +58,6 @@ def main(
     else:
         model = read_model_file(model_file)
     settings = read_solver_file(solver_file)
-    if settings.print_flag != _VTU_PRINT_FLAG:
-        logger.warning(
-            "Print flag %d is not supported; writing VTU (flag 2) instead",
-            settings.print_flag,
-        )
     result = simulate(
         model,
         Tissue.read_init(init_file),
@@ -74,6 +67,6 @@ def main(
         t_start=settings.t_start,
         output_dir=vtk_output,
     )
-    if init_output is not None and result.final is not None:
+    if init_output is not None:
         result.final.write_init(init_output)
         logger.info("Wrote %s", init_output)

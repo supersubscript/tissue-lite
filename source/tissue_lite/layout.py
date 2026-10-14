@@ -26,9 +26,37 @@ GROWTH_COUNT = 30  # written by StrainTRBS growth
 STRESS_DIRECTION_SECOND = slice(31, 34)  # growth layout (overwrites the normal)
 STRESS_SECOND = 34  # growth layout
 NORMAL = slice(32, 35)
+STRESS_TENSOR_START = 26  # TRBS level-0 index; written only by dead branches
 
-STRAIN_START = 8
-STRAIN_PERPENDICULAR_START = 26
-STRESS_START = 4
-STRESS_SECOND_START = 31
-NORMAL_START = 32
+MICROTUBULE_START = MICROTUBULE.start
+STRESS_START = STRESS_DIRECTION.start
+STRAIN_START = STRAIN_DIRECTION.start
+STRAIN_PERPENDICULAR_START = STRAIN_PERPENDICULAR.start
+STRESS_SECOND_START = STRESS_DIRECTION_SECOND.start
+NORMAL_START = NORMAL.start
+
+# Where TRBS stores principal strain and stress axes: (strain starts, stress starts).
+STORAGE = {
+    "sweep": ([STRAIN_START], [STRESS_START]),
+    "growth": (
+        [STRAIN_START, STRAIN_PERPENDICULAR_START],
+        [STRESS_START, STRESS_SECOND_START],
+    ),
+}
+
+# TRBS level-0 indices: rest length, MT, strain and stress anisotropy, rest area,
+# iso and aniso energy, longitudinal modulus, von Mises stress, stress tensor and
+# normal.
+TRBS_LEVEL0 = [
+    0,
+    MICROTUBULE_START,
+    STRAIN_ANISOTROPY,
+    STRESS_ANISOTROPY,
+    REST_AREA,
+    YOUNG_TRANSVERSE,
+    YOUNG_TRANSVERSE,
+    YOUNG_LONGITUDINAL,
+    VON_MISES_STRESS,
+    STRESS_TENSOR_START,
+    NORMAL_START,
+]

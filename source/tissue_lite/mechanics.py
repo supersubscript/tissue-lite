@@ -6,7 +6,7 @@ from Tissue e74e457. Every expression keeps Tissue's evaluation order so that re
 are bit-identical; do not simplify them algebraically.
 """
 
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 
 import numba
 import numpy as np
@@ -115,7 +115,6 @@ class CellMechanics:
 class Triangles:
     """Index arrays of the centre triangles, in Tissue's cell and wall order."""
 
-    cell: IntArray
     v2: IntArray
     v3: IntArray
     wall: IntArray
@@ -129,7 +128,6 @@ class Triangles:
         flat = np.arange(len(topo.cell_vertices))
         nxt = topo.triangle_next
         return cls(
-            cell=topo.triangle_cells,
             v2=topo.cell_vertices,
             v3=topo.cell_vertices[nxt],
             wall=topo.cell_walls,
@@ -172,17 +170,7 @@ class MaterialParameters:
         self,
     ) -> tuple[float, float, float, float, bool, bool, int, float, float]:
         """Returns the fields in kernel-argument order."""
-        return (
-            self.young_matrix,
-            self.young_fibre,
-            self.poisson_longitudinal,
-            self.poisson_transverse,
-            self.double,
-            self.soften,
-            self.concentration_index,
-            self.k_hill,
-            self.n_hill,
-        )
+        return astuple(self)
 
 
 @numba.njit(cache=True)
@@ -257,9 +245,9 @@ def trbs_forces(
         mio_l = young_l / (2 * (1 + nu_l))
         lam_t = young_t * nu_t / (1 - nu_t * nu_t)
         mio_t = young_t / (2 * (1 + nu_t))
-        a_g0 = cell_vars[c, 0]
-        a_g1 = cell_vars[c, 1]
-        a_g2 = cell_vars[c, 2]
+        a_g0 = cell_vars[c, layout.MICROTUBULE_START]
+        a_g1 = cell_vars[c, layout.MICROTUBULE_START + 1]
+        a_g2 = cell_vars[c, layout.MICROTUBULE_START + 2]
         for t in range(offsets[c], offsets[c + 1]):
             i2 = tri_v2[t]
             i3 = tri_v3[t]
@@ -328,17 +316,12 @@ def trbs_forces(
                 + (p21 - p11) * (p21 - p11)
                 + (p22 - p12) * (p22 - p12)
             )
-            temp_b = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
             xc0 = (p20 - p10) / temp_a
             xc1 = (p21 - p11) / temp_a
             xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / temp_b
-            bc1 = (p01 - p11) / temp_b
-            bc2 = (p02 - p12) / temp_b
+            bc0 = (p00 - p10) / l0
+            bc1 = (p01 - p11) / l0
+            bc2 = (p02 - p12) / l0
             zc0 = xc1 * bc2 - xc2 * bc1
             zc1 = xc2 * bc0 - xc0 * bc2
             zc2 = xc0 * bc1 - xc1 * bc0
@@ -674,9 +657,9 @@ def trbs_update(
         total_area = 0.0
         energy_iso = 0.0
         energy_aniso = 0.0
-        a_g0 = cell_vars[c, 0]
-        a_g1 = cell_vars[c, 1]
-        a_g2 = cell_vars[c, 2]
+        a_g0 = cell_vars[c, layout.MICROTUBULE_START]
+        a_g1 = cell_vars[c, layout.MICROTUBULE_START + 1]
+        a_g2 = cell_vars[c, layout.MICROTUBULE_START + 2]
         for t in range(offsets[c], offsets[c + 1]):
             i2 = tri_v2[t]
             i3 = tri_v3[t]
@@ -731,17 +714,12 @@ def trbs_update(
                 + (p21 - p11) * (p21 - p11)
                 + (p22 - p12) * (p22 - p12)
             )
-            temp_b = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
             xc0 = (p20 - p10) / temp_a
             xc1 = (p21 - p11) / temp_a
             xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / temp_b
-            bc1 = (p01 - p11) / temp_b
-            bc2 = (p02 - p12) / temp_b
+            bc0 = (p00 - p10) / l0
+            bc1 = (p01 - p11) / l0
+            bc2 = (p02 - p12) / l0
             zc0 = xc1 * bc2 - xc2 * bc1
             zc1 = xc2 * bc0 - xc0 * bc2
             zc2 = xc0 * bc1 - xc1 * bc0
@@ -962,17 +940,9 @@ def trbs_update(
             cell_vars[c, k1 + 3] = e2
         mt_norm = np.sqrt(a_g0 * a_g0 + a_g1 * a_g1 + a_g2 * a_g2)
         if mt_norm > 0:
-            cell_vars[c, 0] = cell_vars[c, 0] / mt_norm
-            cell_vars[c, 1] = cell_vars[c, 1] / mt_norm
-            cell_vars[c, 2] = cell_vars[c, 2] / mt_norm
+            for d in range(3):
+                mt = layout.MICROTUBULE_START + d
+                cell_vars[c, mt] = cell_vars[c, mt] / mt_norm
         cell_vars[c, layout.REST_AREA] = total_rest
         energy_iso_out[c] = energy_iso / total_rest
         cell_vars[c, layout.YOUNG_TRANSVERSE] = energy_aniso / total_rest
-
-
-def fix_boundary(
-    boundary: NDArray[np.bool_], axes: tuple[int, ...], vd: FloatArray
-) -> None:
-    """Zeroes the derivatives of edge vertices along the fixed axes."""
-    for axis in axes:
-        vd[boundary, axis] = 0.0

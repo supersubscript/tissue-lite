@@ -32,7 +32,13 @@ from tissue_lite.mechanics import (
     Triangles,
 )
 from tissue_lite.rand import make_rand_state
-from tissue_lite.tissue import CentreTriangulation, FloatArray, Tissue, cell_centroids
+from tissue_lite.tissue import (
+    CentreTriangulation,
+    FloatArray,
+    IntArray,
+    Tissue,
+    cell_centroids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,19 +96,12 @@ class MeristemModel:
 
 def _format_toml(data: dict[str, object]) -> str:
     """Formats a nested dict of scalars, tuples and dicts as TOML."""
-    scalars = {
-        k: v for k, v in data.items() if not isinstance(v, dict) and v is not None
-    }
-    tables = {k: v for k, v in data.items() if isinstance(v, dict)}
-    lines = [f"{k} = {_toml_value(v)}" for k, v in scalars.items()]
-    for name, table in tables.items():
-        lines += _toml_table(name, table)
-    return "\n".join(lines) + "\n"
+    return "\n".join(_toml_table(None, data)) + "\n"
 
 
-def _toml_table(name: str, table: dict[str, object]) -> list[str]:
-    """Returns the lines of one TOML table and its sub-tables."""
-    lines = ["", f"[{name}]"]
+def _toml_table(name: str | None, table: dict[str, object]) -> list[str]:
+    """Returns the lines of a TOML table (the root if name is None) and subtables."""
+    lines = [] if name is None else ["", f"[{name}]"]
     lines += [
         f"{k} = {_toml_value(v)}"
         for k, v in table.items()
@@ -110,7 +109,7 @@ def _toml_table(name: str, table: dict[str, object]) -> list[str]:
     ]
     for k, v in table.items():
         if isinstance(v, dict):
-            lines += _toml_table(f"{name}.{k}", v)
+            lines += _toml_table(k if name is None else f"{name}.{k}", v)
     return lines
 
 
@@ -169,6 +168,11 @@ class ModelState:
     rest_positions: FloatArray = field(init=False)
     triangles: Triangles = field(init=False)
     material: MaterialParameters = field(init=False)
+    _material_args: tuple[float, float, float, float, bool, bool, int, float, float] = (
+        field(init=False, repr=False)
+    )
+    _extensions: FloatArray = field(init=False, repr=False)  # empty if single
+    _fixed: tuple[IntArray, IntArray] = field(init=False, repr=False)
     stress_tensor: FloatArray = field(init=False)
     strain_tensor: FloatArray = field(init=False)
     energy_isotropic: FloatArray = field(init=False)
@@ -195,6 +199,11 @@ class ModelState:
         self.rest_positions = tissue.vertices.copy()
         self.triangles = Triangles.from_tissue(tissue, membrane.double_rest_lengths)
         self.material = MaterialParameters.from_membrane(membrane)
+        self._material_args = self.material.as_tuple()
+        ext = tissue.triangulation.wall_extensions
+        self._extensions = np.empty(0) if ext is None else ext
+        edge = np.flatnonzero(tissue.topology.boundary)
+        self._fixed = np.ix_(edge, np.array(model.boundary.fixed_axes, dtype=np.int64))
         self.stress_tensor = np.zeros((n_cells, 3, 3))
         self.strain_tensor = np.zeros((n_cells, 3, 3))
         self.energy_isotropic = np.zeros(n_cells)
@@ -205,11 +214,6 @@ class ModelState:
         if self.tissue.triangulation is None:
             raise ValueError("Tissue has no centre triangulation")
         return self.tissue.triangulation
-
-    def _extensions(self) -> FloatArray:
-        """Wall extensions, or an empty array for single rest lengths."""
-        ext = self.triangulation.wall_extensions
-        return np.empty(0) if ext is None else ext
 
     def derivatives(
         self,
@@ -233,11 +237,11 @@ class ModelState:
             topo.wall_vertices,
             self.tissue.wall_lengths,
             self.triangulation.spokes,
-            self._extensions(),
+            self._extensions,
             centres,
             cell_vars,
             vertices,
-            *self.material.as_tuple(),
+            *self._material_args,
             self.rand_state,
             vd,
             cd,
@@ -268,7 +272,7 @@ class ModelState:
             layout.ANGLE_STRESS_STRAIN,
         )
         _volume_diagnostic(cell_vars, vertices, self.rest_positions, vd)
-        mechanics.fix_boundary(topo.boundary, model.boundary.fixed_axes, vd)
+        vd[self._fixed] = 0.0
         if model.track_velocity:
             _velocity_diagnostic(cell_vars, topo.offsets, topo.cell_vertices, vd)
         return vd, cd
@@ -303,11 +307,11 @@ class ModelState:
             topo.wall_vertices,
             tissue.wall_lengths,
             triangulation.spokes,
-            self._extensions(),
+            self._extensions,
             triangulation.centres,
             cell_vars,
             tissue.vertices,
-            *self.material.as_tuple(),
+            *self._material_args,
             model.layout == "growth",
             self.rand_state,
             self.stress_tensor,
@@ -321,29 +325,19 @@ class ModelState:
             self.pressure_factor = 1.0
         if model.microtubules is not None:
             m = model.microtubules
-            gate = 0
-            if m.velocity_threshold is not None:
-                gate = 1 if m.stress_difference_threshold is None else 2
-            feedback.update_microtubules(
-                cell_vars,
-                h,
-                m.rate,
-                gate,
-                0.0 if m.velocity_threshold is None else m.velocity_threshold,
-                0.0
-                if m.stress_difference_threshold is None
-                else m.stress_difference_threshold,
-            )
+            feedback.update_microtubules(cell_vars, h, m.rate, *m.gate())
         if model.growth is not None:
             growth.update_growth(
                 topo.offsets,
                 tri.v2,
                 tri.v3,
                 tri.wall,
+                tri.spoke_start,
+                tri.spoke_end,
                 topo.wall_vertices,
                 tissue.wall_lengths,
                 triangulation.spokes,
-                self._extensions(),
+                self._extensions,
                 triangulation.centres,
                 cell_vars,
                 tissue.vertices,

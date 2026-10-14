@@ -4,11 +4,9 @@ import logging
 from pathlib import Path
 
 import pytest
-from conftest import CASES_DIR
+from conftest import CASES_DIR, MODELS
 
 from tissue_lite.legacy import parse_reactions, read_model_file, read_solver_file
-
-MODELS = sorted(CASES_DIR.glob("*/model.model"))
 
 
 def _model_text(case: str) -> str:

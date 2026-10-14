@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import CASES_DIR, MESHES_DIR
+from conftest import CASES_DIR, MESHES_DIR, MODELS, case_state
 
 from tissue_lite import layout
 from tissue_lite.growth import StrainGrowth
@@ -12,8 +12,6 @@ from tissue_lite.legacy import read_model_file
 from tissue_lite.mechanics import Boundary, Pressure, TRBSMembrane
 from tissue_lite.model import MeristemModel, ModelState
 from tissue_lite.tissue import Tissue
-
-MODELS = sorted(CASES_DIR.glob("*/model.model"))
 
 
 @pytest.mark.parametrize("path", MODELS, ids=lambda p: p.parent.name)
@@ -118,11 +116,7 @@ def test_softening_scales_forces() -> None:
 
 
 def test_cell_mechanics_after_update() -> None:
-    case = CASES_DIR / "sweep_120_120"
-    state = ModelState(
-        model=read_model_file(case / "model.model"),
-        tissue=Tissue.read_init(case / "input.init"),
-    )
+    state = case_state(CASES_DIR / "sweep_120_120")
     state.derivatives(
         state.tissue.cell_variables, state.triangulation.centres, state.tissue.vertices
     )

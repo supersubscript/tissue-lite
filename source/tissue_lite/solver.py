@@ -9,14 +9,14 @@ and the error scale is `|y| + |h dy| + 1e-9 tolerance`.
 
 import logging
 import math
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from tissue_lite.mechanics import CellMechanics
 from tissue_lite.model import MeristemModel, ModelState
+from tissue_lite.output import VtuWriter
 from tissue_lite.tissue import FloatArray, Tissue
 
 logger = logging.getLogger(__name__)
@@ -70,18 +70,15 @@ class Frame:
 class SimulationResult:
     """Printed frames and step statistics of one run; `final` is the end state."""
 
-    frames: list[Frame] = field(default_factory=list)
-    accepted_steps: int = 0
-    rejected_steps: int = 0
-    final: Tissue | None = None
+    frames: list[Frame]
+    accepted_steps: int
+    rejected_steps: int
+    final: Tissue
 
     @property
     def times(self) -> FloatArray:
         """Times of the printed frames."""
         return np.array([f.time for f in self.frames])
-
-
-type FrameCallback = Callable[[int, Frame], None]
 
 
 def simulate(
@@ -102,16 +99,9 @@ def simulate(
         ValueError: If the time span is empty.
         RuntimeError: If the step size underflows.
     """
-    from tissue_lite.output import VtuWriter
-
     writer = None if output_dir is None else VtuWriter(output_dir, n_frames)
     state = ModelState(model=model, tissue=tissue.copy())
-
-    def on_frame(index: int, frame: Frame) -> None:
-        if writer is not None:
-            writer.write(index, frame.tissue)
-
-    return integrate(state, t_start, t_end, n_frames, solver, on_frame)
+    return integrate(state, t_start, t_end, n_frames, solver, writer)
 
 
 def integrate(
@@ -120,13 +110,14 @@ def integrate(
     t_end: float,
     n_frames: int,
     solver: CashKarp,
-    on_frame: FrameCallback | None = None,
+    writer: VtuWriter | None = None,
 ) -> SimulationResult:
     """Port of `RK5Adaptive::simulate` on an initiated model state."""
     if not (t_end - t_start > 0.0):
         raise ValueError("t_end must exceed t_start")
     tissue = state.tissue
-    result = SimulationResult()
+    frames: list[Frame] = []
+    accepted = rejected = 0
     eps = solver.tolerance
     h1 = solver.max_step
     tiny = 1e-9 * eps
@@ -143,9 +134,9 @@ def integrate(
     def emit() -> None:
         mech = state.cell_mechanics() if state.mechanics_valid else None
         frame = Frame(time=t, tissue=tissue.copy(), mechanics=mech)
-        if on_frame is not None:
-            on_frame(len(result.frames), frame)
-        result.frames.append(frame)
+        if writer is not None:
+            writer.write(len(frames), frame.tissue)
+        frames.append(frame)
 
     while True:
         centres = state.triangulation.centres
@@ -161,9 +152,9 @@ def integrate(
         h_did, h_next = _step(state, t, h, vd, cd, scale_v, scale_c, eps)
         t += h_did
         if h_did == h:
-            result.accepted_steps += 1
+            accepted += 1
         else:
-            result.rejected_steps += 1
+            rejected += 1
         state.update(h)
         if t >= t_end:
             if do_print:
@@ -171,13 +162,8 @@ def integrate(
                     tissue.cell_variables, state.triangulation.centres, tissue.vertices
                 )
                 emit()
-            logger.info(
-                "Simulation done: %d ok, %d bad steps",
-                result.accepted_steps,
-                result.rejected_steps,
-            )
-            result.final = tissue.copy()
-            return result
+            logger.info("Simulation done: %d ok, %d bad steps", accepted, rejected)
+            return SimulationResult(frames, accepted, rejected, tissue.copy())
         h = h_next
         if h > h1:
             h = h1
@@ -210,10 +196,7 @@ def _step(
         if err_max <= 1.0:
             break
         h_temp = _SAFETY * h * math.pow(err_max, _PSHRINK)
-        if h >= 0.0:
-            h = h_temp if h_temp > 0.1 * h else 0.1 * h
-        else:
-            h = 0.1 * h if h_temp > 0.1 * h else h_temp
+        h = h_temp if h_temp > 0.1 * h else 0.1 * h  # h > 0 (integrate checks)
         if t + h == t:
             raise RuntimeError("Step size underflow")
     h_next = _SAFETY * h * math.pow(err_max, _PGROW) if err_max > _ERRCON else 5.0 * h
@@ -288,8 +271,6 @@ def prerun_and_simulate(
         prerun_solver,
         output_dir=output_dir,
     )
-    if prerun.final is None:
-        raise RuntimeError("Prerun produced no final state")
     start = prerun.final.without_triangulation()
     main = simulate(model, start, t_end, n_frames, solver, output_dir=output_dir)
     return prerun, main

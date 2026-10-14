@@ -29,6 +29,8 @@ def update_growth(
     tri_v2: IntArray,
     tri_v3: IntArray,
     tri_wall: IntArray,
+    spoke_start: IntArray,
+    spoke_end: IntArray,
     wall_vertices: IntArray,
     wall_lengths: FloatArray,
     spokes: FloatArray,
@@ -41,23 +43,23 @@ def update_growth(
     threshold: float,
 ) -> None:
     """Applies one explicit growth update of length h to the double rest lengths."""
+    comp = np.empty((3, 2))
     for c in range(offsets.shape[0] - 1):
         start = offsets[c]
         n_walls = offsets[c + 1] - start
         cell_vars[c, layout.GROWTH_COUNT] = 0
         g1 = cell_vars[c, layout.GROWTH_VALUE_1]
         g2 = cell_vars[c, layout.STRESS_MAX]
-        gg0 = cell_vars[c, 0]
-        gg1 = cell_vars[c, 1]
-        gg2 = cell_vars[c, 2]
+        gg0 = cell_vars[c, layout.MICROTUBULE_START]
+        gg1 = cell_vars[c, layout.MICROTUBULE_START + 1]
+        gg2 = cell_vars[c, layout.MICROTUBULE_START + 2]
         for k in range(n_walls):
             t = start + k
-            kp = start + (k + 1) % n_walls
             i2 = tri_v2[t]
             i3 = tri_v3[t]
             w = tri_wall[t]
-            rl0 = spokes[2 * t + 1]
-            rl2 = spokes[2 * kp]
+            rl0 = spokes[spoke_start[t]]
+            rl2 = spokes[spoke_end[t]]
             rl1 = wall_lengths[w] + extensions[t]
             p00, p01, p02 = centres[c, 0], centres[c, 1], centres[c, 2]
             p10, p11, p12 = x[i2, 0], x[i2, 1], x[i2, 2]
@@ -100,17 +102,12 @@ def update_growth(
                 + (p21 - p11) * (p21 - p11)
                 + (p22 - p12) * (p22 - p12)
             )
-            temp_b = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
             xc0 = (p20 - p10) / temp_a
             xc1 = (p21 - p11) / temp_a
             xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / temp_b
-            bc1 = (p01 - p11) / temp_b
-            bc2 = (p02 - p12) / temp_b
+            bc0 = (p00 - p10) / l0
+            bc1 = (p01 - p11) / l0
+            bc2 = (p02 - p12) / l0
             zc0 = xc1 * bc2 - xc2 * bc1
             zc1 = xc2 * bc0 - xc0 * bc2
             zc2 = xc0 * bc1 - xc1 * bc0
@@ -130,7 +127,6 @@ def update_growth(
             gr1 /= gnorm
             edges = ((-pa, -pc), (pb, 0.0), (pa - pb, pc))
             rests = (rl0, rl1, rl2)
-            comp = np.empty((3, 2))
             for j in range(3):
                 cos_t = abs((gr0 * edges[j][0] + gr1 * edges[j][1]) / rests[j])
                 sin_t = np.sqrt(abs(1 - cos_t * cos_t))
@@ -157,5 +153,5 @@ def update_growth(
             external = np.sqrt(comp[1, 0] * comp[1, 0] + comp[1, 1] * comp[1, 1])
             internal_next = np.sqrt(comp[2, 0] * comp[2, 0] + comp[2, 1] * comp[2, 1])
             extensions[t] = external - wall_lengths[w]
-            spokes[2 * t + 1] = internal
-            spokes[2 * kp] = internal_next
+            spokes[spoke_start[t]] = internal
+            spokes[spoke_end[t]] = internal_next

@@ -4,12 +4,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from conftest import CASES, CASES_DIR
+from conftest import CASES, CASES_DIR, CaseRunner
 
-from tissue_lite.legacy import read_model_file, read_solver_file
+from tissue_lite.legacy import read_solver_file
 from tissue_lite.output import format_pvd
-from tissue_lite.solver import simulate
-from tissue_lite.tissue import Tissue
 
 
 def _tokens_close(actual: str, expected: str) -> None:
@@ -28,20 +26,12 @@ def _tokens_close(actual: str, expected: str) -> None:
 
 
 @pytest.mark.parametrize("case", CASES)
-def test_vtu_frames_match_tissue(case: Path, tmp_path: Path) -> None:
-    settings = read_solver_file(case / "solver.rk5")
-    simulate(
-        read_model_file(case / "model.model"),
-        Tissue.read_init(case / "input.init"),
-        t_end=settings.t_end,
-        n_frames=settings.n_frames,
-        solver=settings.solver,
-        output_dir=tmp_path,
-    )
+def test_vtu_frames_match_tissue(case: Path, run_case: CaseRunner) -> None:
+    _, vtk = run_case(case)
     expected = sorted(p.name for p in (case / "vtk").iterdir())
-    assert sorted(p.name for p in tmp_path.iterdir()) == expected
+    assert sorted(p.name for p in vtk.iterdir()) == expected
     for name in expected:
-        _tokens_close((tmp_path / name).read_text(), (case / "vtk" / name).read_text())
+        _tokens_close((vtk / name).read_text(), (case / "vtk" / name).read_text())
 
 
 @pytest.mark.parametrize("n_frames", [2, 3])

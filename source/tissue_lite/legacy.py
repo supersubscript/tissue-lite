@@ -48,8 +48,8 @@ _REQUIRED = {
     "TemplateVolumeChange",
     "VertexNoUpdateBoundary",
 }
+_VTU_PRINT_FLAG = 2
 _IGNORED_DIRECTIONS = {"StaticDirection", "ParallellDirection"}
-_TRBS_LEVEL0 = [0, 0, 17, 18, 19, 20, 20, 16, 21, 26, 32]
 _FIBRE_CODES = {code: name for name, code in COUPLING_CODES.items()}
 _INITIALISE: dict[int, Initialisation] = {0: "none", 1: "isotropic", 2: "anisotropic"}
 
@@ -135,7 +135,8 @@ def model_from_reactions(reactions: list[Reaction]) -> MeristemModel:
     if initiate.indices != [[com]]:
         raise ValueError("Initiate and TRBS centre indices disagree")
     _expect_angles([r for r in reactions if r.name == "CalculateAngleVectors"])
-    if by_name["TemplateVolumeChange"].indices != [[1, 25, 2, 25, 3, 25]]:
+    volume = [1, layout.VOLUME_CHANGE, 2, layout.VOLUME_CHANGE, 3, layout.VOLUME_CHANGE]
+    if by_name["TemplateVolumeChange"].indices != [volume]:
         raise ValueError("TemplateVolumeChange must store into cells 1-3, slot 25")
     return MeristemModel(
         membrane=membrane,
@@ -194,17 +195,13 @@ def _membrane(r: Reaction) -> tuple[TRBSMembrane, Layout, int]:
             concentration_index=level0[11], k_hill=p[9], n_hill=p[10]
         )
         level0 = level0[:11]
-    if level0 != _TRBS_LEVEL0:
-        raise ValueError(f"TRBS-MT level-0 indices must be {_TRBS_LEVEL0}")
-    strain, stress = r.indices[2], r.indices[3]
-    if strain == [8] and stress == [4]:
-        model_layout: Layout = "sweep"
-    elif strain == [8, 26] and stress == [4, 31]:
-        model_layout = "growth"
-    else:
-        raise ValueError(
-            "Strain/stress storage must be ([8], [4]) or ([8, 26], [4, 31])"
-        )
+    if level0 != layout.TRBS_LEVEL0:
+        raise ValueError(f"TRBS-MT level-0 indices must be {layout.TRBS_LEVEL0}")
+    storage = (r.indices[2], r.indices[3])
+    found = [name for name, value in layout.STORAGE.items() if value == storage]
+    if not found:
+        raise ValueError(f"Strain/stress storage must be one of {layout.STORAGE}")
+    model_layout: Layout = "growth" if found[0] == "growth" else "sweep"
     membrane = TRBSMembrane(
         young_matrix=p[0],
         young_fibre=p[1],
@@ -260,7 +257,12 @@ def _fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
 
 def _microtubules(r: Reaction) -> MicrotubuleAlignment:
     p = r.parameters
-    expected = [[4], [0], [22], [7, 21]][: len(r.indices)]
+    expected = [
+        [layout.STRESS_START],
+        [layout.MICROTUBULE_START],
+        [layout.VELOCITY],
+        [layout.STRESS_MAX, layout.VON_MISES_STRESS],
+    ][: len(r.indices)]
     if r.indices != expected or len(r.indices) < 2:
         raise ValueError(f"UpdateMTDirectionEquilibrium indices must be {expected}")
     if len(p) >= 3 and len(r.indices) < 4:
@@ -291,7 +293,10 @@ def _velocity(r: Reaction | None) -> bool:
 
 
 def _expect_angles(angles: list[Reaction]) -> None:
-    expected = [[[0, 4], [23]], [[4, 8], [24]]]
+    expected = [
+        [[layout.MICROTUBULE_START, layout.STRESS_START], [layout.ANGLE_MT_STRESS]],
+        [[layout.STRESS_START, layout.STRAIN_START], [layout.ANGLE_STRESS_STRAIN]],
+    ]
     if [a.indices for a in angles] != expected:
         raise ValueError(f"CalculateAngleVectors indices must be {expected}")
 
@@ -306,6 +311,8 @@ def read_solver_file(path: Path) -> SolverFile:
     if not tokens or tokens[0] != "RK5Adaptive":
         raise ValueError("Only RK5Adaptive solver files are supported")
     t_start, t_end, flag, n_print, h1, eps = tokens[1:7]
+    if int(flag) != _VTU_PRINT_FLAG:
+        logger.warning("Print flag %s is not supported; output is VTU (flag 2)", flag)
     return SolverFile(
         solver=CashKarp(max_step=float(h1), tolerance=float(eps)),
         t_start=float(t_start),

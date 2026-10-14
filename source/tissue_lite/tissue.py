@@ -7,6 +7,7 @@ floating-point summation order.
 """
 
 import logging
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -85,11 +86,6 @@ class CentreTriangulation:
     spokes: FloatArray  # (sum N,) or (2 sum N,)
     wall_extensions: FloatArray | None = None  # (sum N,), double rest lengths only
 
-    @property
-    def double(self) -> bool:
-        """Whether each triangle has independent rest lengths."""
-        return self.wall_extensions is not None
-
 
 @dataclass
 class Tissue:
@@ -117,23 +113,13 @@ class Tissue:
 
     def copy(self) -> Tissue:
         """Returns a deep copy of the state; the topology is shared."""
-        triangulation = None
-        if self.triangulation is not None:
-            t = self.triangulation
-            triangulation = CentreTriangulation(
-                centres=t.centres.copy(),
-                spokes=t.spokes.copy(),
-                wall_extensions=None
-                if t.wall_extensions is None
-                else t.wall_extensions.copy(),
-            )
         return replace(
             self,
             vertices=self.vertices.copy(),
             wall_lengths=self.wall_lengths.copy(),
             wall_variables=self.wall_variables.copy(),
             cell_variables=self.cell_variables.copy(),
-            triangulation=triangulation,
+            triangulation=deepcopy(self.triangulation),
         )
 
     def without_triangulation(self) -> Tissue:

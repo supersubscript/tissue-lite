@@ -4,7 +4,6 @@ Ports `FiberModel::General` and `UpdateMTDirectionEquilibrium` from Tissue e74e4
 Both are explicit updates applied once per accepted solver step.
 """
 
-import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -66,10 +65,19 @@ class MicrotubuleAlignment:
         ):
             raise ValueError("stress_difference_threshold needs velocity_threshold")
 
+    def gate(self) -> tuple[int, float, float]:
+        """Returns (gate level, velocity threshold, stress threshold) for the kernel."""
+        if self.velocity_threshold is None:
+            return 0, 0.0, 0.0
+        if self.stress_difference_threshold is None:
+            return 1, self.velocity_threshold, 0.0
+        return 2, self.velocity_threshold, self.stress_difference_threshold
 
+
+@numba.njit(cache=True)
 def _hill_fraction(a: float, k: float, n: float) -> float:
     """Returns Tissue's `a^n / ((1 - a)^n k^n + a^n)`."""
-    return math.pow(a, n) / (math.pow(1 - a, n) * math.pow(k, n) + math.pow(a, n))
+    return a**n / ((1 - a) ** n * k**n + a**n)
 
 
 def initiate_fibres(
@@ -120,7 +128,7 @@ def update_fibres(
         if coupling == 0 and gate:
             delta = young_matrix + 0.5 * (1 + a) * young_fibre - young_l
             cell_vars[c, layout.YOUNG_LONGITUDINAL] += rate * h * delta
-        hill = a**n / ((1 - a) ** n * k**n + a**n)
+        hill = _hill_fraction(a, k, n)
         if coupling == 1 and gate:
             delta = young_matrix + 0.5 * (1 + hill) * young_fibre - young_l
             cell_vars[c, layout.YOUNG_LONGITUDINAL] += rate * h * delta
@@ -149,6 +157,7 @@ def update_microtubules(
     if rate == 0.0:
         return
     target = layout.STRESS_START
+    mt = layout.MICROTUBULE_START
     for c in range(cell_vars.shape[0]):
         if gate_level >= 1 and not (cell_vars[c, layout.VELOCITY] < velocity_threshold):
             continue
@@ -159,15 +168,17 @@ def update_microtubules(
                 continue
         dot = 0.0
         for d in range(3):
-            dot += cell_vars[c, d] * cell_vars[c, target + d]
+            dot += cell_vars[c, mt + d] * cell_vars[c, target + d]
         if dot < 0:
             for d in range(3):
-                cell_vars[c, d] *= -1
+                cell_vars[c, mt + d] *= -1
         for d in range(3):
-            cell_vars[c, d] += rate * h * (cell_vars[c, target + d] - cell_vars[c, d])
+            cell_vars[c, mt + d] += (
+                rate * h * (cell_vars[c, target + d] - cell_vars[c, mt + d])
+            )
         norm = 0.0
         for d in range(3):
-            norm += cell_vars[c, d] * cell_vars[c, d]
+            norm += cell_vars[c, mt + d] * cell_vars[c, mt + d]
         norm = 1.0 / np.sqrt(norm)
         for d in range(3):
-            cell_vars[c, d] *= norm
+            cell_vars[c, mt + d] *= norm

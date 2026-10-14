@@ -1,25 +1,13 @@
 """Tests for strain-driven wall growth."""
 
-from pathlib import Path
-
 import numpy as np
-from conftest import CASES_DIR
+from conftest import CASES_DIR, case_state
 
 from tissue_lite import layout
-from tissue_lite.legacy import read_model_file
-from tissue_lite.model import ModelState
-from tissue_lite.tissue import Tissue
-
-
-def _state(case: Path) -> ModelState:
-    return ModelState(
-        model=read_model_file(case / "model.model"),
-        tissue=Tissue.read_init(case / "input.init"),
-    )
 
 
 def test_growth_lengthens_rest_lengths_under_tension() -> None:
-    state = _state(CASES_DIR / "aniso_growth")
+    state = case_state(CASES_DIR / "aniso_growth")
     tissue = state.tissue
     tissue.vertices *= 1.05
     state.triangulation.centres[:] *= 1.05
@@ -36,7 +24,7 @@ def test_growth_lengthens_rest_lengths_under_tension() -> None:
 
 
 def test_no_growth_without_strain() -> None:
-    state = _state(CASES_DIR / "aniso_growth")
+    state = case_state(CASES_DIR / "aniso_growth")
     tissue = state.tissue
     walls = tissue.wall_lengths.copy()
     state.update(0.0)

@@ -17,12 +17,17 @@ logger = logging.getLogger(__name__)
 _CELL_SHRINK = 0.1  # Tissue's WALL_RELATIVE_THICKNESS
 _POLYGON = 7
 _TRIANGLE = 5
-_QUAD = 7
+_QUAD = 7  # Tissue writes VTK_POLYGON (7), not VTK_QUAD (9), for walls
 
 
 def _g(value: float) -> str:
     """Formats a float as a default C++ ostream does."""
     return f"{value:g}"
+
+
+def _row(values: FloatArray) -> str:
+    """Formats values space-separated with a trailing space, as Tissue does."""
+    return "".join(f"{_g(x)} " for x in values)
 
 
 def _piece_header(n_points: int, n_cells: int) -> str:
@@ -69,12 +74,12 @@ def format_cells(tissue: Tissue) -> str:
     out += [f"{_g(a)} {_g(b)} {_g(c)}\n" for a, b, c in v[:, :3]]
     out.append("</DataArray>\n")
     out.append('<DataArray type="Float64" Name="cell vector length" format="ascii">\n')
-    out.append("".join(f"{_g(x)} " for x in v[:, 3]) + "\n</DataArray>\n")
+    out.append(_row(v[:, 3]) + "\n</DataArray>\n")
     for i in range(4, v.shape[1]):
         out.append(
             f'<DataArray type="Float64" Name="cell variable {i}" format="ascii">\n'
         )
-        out.append("".join(f"{_g(x)} " for x in v[:, i]) + "\n</DataArray>\n")
+        out.append(_row(v[:, i]) + "\n</DataArray>\n")
     out.append("</CellData>\n</Piece>\n</UnstructuredGrid>\n</VTKFile>\n")
     return "".join(out)
 
@@ -110,7 +115,7 @@ def format_walls(tissue: Tissue) -> str:
     out.append('<CellData Scalars="wall variable 0">\n')
     out.append('<DataArray type="Float64" Name="wall length" format="ascii">\n')
     lengths = tissue.wall_lengths[topo.cell_walls]
-    out.append("".join(f"{_g(x)} " for x in lengths) + "\n</DataArray>\n")
+    out.append(_row(lengths) + "\n</DataArray>\n")
     is_second = topo.wall_cells[topo.cell_walls, 0] != topo.triangle_cells
     n_vars = tissue.wall_variables.shape[1]
     for i in range(0, n_vars, 2):
@@ -119,7 +124,7 @@ def format_walls(tissue: Tissue) -> str:
         out.append(
             f'<DataArray type="Float64" Name="wall variable {i // 2}" format="ascii">\n'
         )
-        out.append("".join(f"{_g(x)} " for x in values) + "\n</DataArray>\n")
+        out.append(_row(values) + "\n</DataArray>\n")
     out.append("</CellData>\n</Piece>\n</UnstructuredGrid>\n</VTKFile>\n")
     return "".join(out)
 
