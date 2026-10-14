@@ -86,9 +86,8 @@ class CashKarpRun:
         """Takes one accepted step from t, no further than t_bound.
 
         `derivatives` are those of the current positions. The step shrinks until the
-        scaled error passes; the per-step updates then get the trial step, not the
-        accepted one (KNOWN_ISSUES S2), unless `fidelity` is off, and `accepted` is
-        False if it had to shrink.
+        scaled error passes; the per-step updates then get the step `CashKarp`
+        describes (S2), and `accepted` is False if it had to shrink.
 
         Raises:
             RuntimeError: If the step size underflows.
@@ -104,7 +103,7 @@ class CashKarpRun:
         if self.fidelity:
             state.update(h)
         else:
-            # The volume diagnostic is a change since the last call: keep it per step.
+            # volume_change is the only diagnostic carrying state between calls.
             volume_change = state.tissue.cells.volume_change.copy()
             state.compute_forces()
             state.tissue.cells.volume_change[:] = volume_change
