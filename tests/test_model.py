@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 from conftest import CASES_DIR, MESHES_DIR, MODELS, case_state, read_case_tissue
 
+from tissue_lite.arrays import FloatArray
 from tissue_lite.legacy.init_file import read_init
 from tissue_lite.legacy.model_file import read_model_file
 from tissue_lite.material import Boundary, Pressure, TRBSMembrane
@@ -128,7 +129,7 @@ def test_membrane_fidelity_keeps_regular_forces() -> None:
 
 
 def test_pressure_fidelity_sets_nodal_share() -> None:
-    def total_force(fidelity: bool) -> np.ndarray:
+    def compute_total_force(fidelity: bool) -> FloatArray:
         model = MeristemModel(
             membrane=TRBSMembrane(0.0, 0.0),
             pressure=Pressure(1.0, 1e-3, fidelity=fidelity),
@@ -139,7 +140,9 @@ def test_pressure_fidelity_sets_nodal_share() -> None:
         return state.compute_forces().sum(0)
 
     # P A / 3 per node adds up to P A per triangle; Tissue's P A / 2 to 1.5 P A (P1).
-    np.testing.assert_allclose(total_force(False), total_force(True) * 2 / 3)
+    np.testing.assert_allclose(
+        compute_total_force(False), compute_total_force(True) * 2 / 3
+    )
 
 
 @pytest.mark.parametrize(("fidelity", "balanced"), [(True, False), (False, True)])
