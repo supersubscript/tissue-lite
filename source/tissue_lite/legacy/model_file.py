@@ -67,13 +67,13 @@ _TRBS_LEVEL0 = [
     slots.STRESS_TENSOR_START,
     slots.NORMAL.start,
 ]
-# Where TRBS stores principal strain and stress axes: (strain starts, stress starts).
-_STORAGE = {
-    False: ([slots.STRAIN_DIRECTION.start], [slots.STRESS_DIRECTION.start]),
-    True: (
-        [slots.STRAIN_DIRECTION.start, slots.STRAIN_PERPENDICULAR.start],
-        [slots.STRESS_DIRECTION.start, slots.STRESS_DIRECTION_SECOND.start],
-    ),
+# (strain starts, stress starts) where TRBS stores the principal axes → second axes.
+_STORAGE: dict[tuple[tuple[int, ...], tuple[int, ...]], bool] = {
+    ((slots.STRAIN_DIRECTION.start,), (slots.STRESS_DIRECTION.start,)): False,
+    (
+        (slots.STRAIN_DIRECTION.start, slots.STRAIN_PERPENDICULAR.start),
+        (slots.STRESS_DIRECTION.start, slots.STRESS_DIRECTION_SECOND.start),
+    ): True,
 }
 
 
@@ -221,10 +221,9 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
         level0 = level0[:11]
     if level0 != _TRBS_LEVEL0:
         raise ValueError(f"TRBS-MT level-0 indices must be {_TRBS_LEVEL0}")
-    storage = (r.indices[2], r.indices[3])
-    found = [second for second, value in _STORAGE.items() if value == storage]
-    if not found:
-        raise ValueError(f"Strain/stress storage must be one of {_STORAGE}")
+    storage = (tuple(r.indices[2]), tuple(r.indices[3]))
+    if storage not in _STORAGE:
+        raise ValueError(f"Strain/stress storage must be one of {list(_STORAGE)}")
     membrane = TRBSMembrane(
         young_matrix=p[0],
         young_fibre=p[1],
@@ -233,7 +232,9 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
         double_rest_lengths=p[10] == 1,
         softening=softening,
     )
-    layout = SlotLayout(second_axes=found[0], concentration_slot=concentration_slot)
+    layout = SlotLayout(
+        second_axes=_STORAGE[storage], concentration_slot=concentration_slot
+    )
     return membrane, layout, r.indices[1][0]
 
 

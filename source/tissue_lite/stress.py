@@ -3,9 +3,7 @@
 Ports the `update` part of `VertexFromTRBScenterTriangulationMT` from Tissue
 e74e457, including its Jacobi eigensolver. Each triangle's Almansi strain and
 Cauchy stress are rotated into global coordinates and averaged over the cell by
-area; the principal axes come from Tissue's Jacobi loops. Every expression keeps
-Tissue's evaluation order so that results are bit-identical; do not simplify them
-algebraically.
+area; the principal axes come from Tissue's Jacobi loops.
 """
 
 import numba
@@ -18,7 +16,6 @@ from tissue_lite.material import (
     compute_anisotropic_stress,
     compute_fibre_direction,
     compute_fibre_strain,
-    compute_green_strain,
     compute_lame_parameters,
     compute_moduli,
 )
@@ -28,14 +25,17 @@ from tissue_lite.triangles import (
     TriangleGeometry,
     TriangleMesh,
     Vector,
-    compute_deformation_gradient,
-    compute_plane_coordinates,
-    compute_shape_vectors,
+    compute_deformation,
+    compute_green_strain,
     compute_triangle_area,
     compute_triangle_geometry,
     cross,
+    divide,
+    dot,
     get_rest_lengths,
+    multiply,
     norm,
+    transpose,
 )
 
 _EIGEN_TOLERANCE = 0.000001
@@ -61,15 +61,17 @@ def update_cell_stress(
 
     Sets the tensors, normal, both principal axes of stress and strain, their
     anisotropies, the von Mises stress, rest area and energies, and normalises the
-    microtubule axis, as Tissue's `update` does.
+    microtubule axis, as Tissue's `update` does. The anisotropic energy also goes
+    into `young_transverse` (Tissue's slot 20, KNOWN_ISSUES T7).
     """
     scratch = np.empty((3, 3))
     strain_mean = np.empty((3, 3))
     stress_mean = np.empty((3, 3))
     eigenvectors = np.empty((3, 3))
-    normal = np.empty(3)
     for c in range(mesh.offsets.shape[0] - 1):
-        young_l, young_t = compute_moduli(cells, c, material)
+        young_l, young_t = compute_moduli(
+            cells.young_longitudinal[c], cells.concentration[c], material
+        )
         lame = compute_lame_parameters(young_l, young_t, material)
         microtubule = (
             cells.microtubule[c, 0],
@@ -78,54 +80,57 @@ def update_cell_stress(
         )
         strain_sum = _ZERO3
         stress_sum = _ZERO3
-        normal[:] = 0.0
+        normal_sum = (0.0, 0.0, 0.0)
         total_rest_area = 0.0
         total_area = 0.0
         energy_iso = 0.0
         energy_aniso = 0.0
         for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
             # Geometry, deformation and fibre direction of the triangle.
-            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
-            rest_lengths = get_rest_lengths(mesh, t)
-            rest_area = compute_triangle_area(rest_lengths)
-            area = compute_triangle_area(tri.lengths)
-            shape = compute_shape_vectors(compute_plane_coordinates(rest_lengths))
-            gradient = compute_deformation_gradient(
-                compute_plane_coordinates(tri.lengths), shape
+            triangle = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            rest_area, _, gradient = compute_deformation(
+                triangle.lengths, get_rest_lengths(mesh, t)
             )
+            area = compute_triangle_area(triangle.lengths)
             fibre = compute_fibre_direction(
-                gradient, tri.x_axis, tri.y_axis, microtubule, rand_state
+                gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state
             )
             strain = compute_green_strain(gradient)
+            left_cauchy_green = multiply(gradient, transpose(gradient))
             # In-plane Almansi strain and Cauchy stress in global axes.
-            strain_global = _rotate_to_global(tri, _compute_almansi_strain(gradient))
+            strain_global = _rotate_to_global(
+                triangle, _compute_almansi_strain(left_cauchy_green)
+            )
             stress_global = _rotate_to_global(
-                tri,
-                _compute_cauchy_stress(gradient, strain, fibre, lame, rest_area / area),
+                triangle,
+                _compute_cauchy_stress(
+                    gradient, left_cauchy_green, strain, fibre, lame, rest_area / area
+                ),
             )
             # Area-weighted sums over the cell.
             strain_sum = _add_scaled(strain_sum, area, strain_global)
             stress_sum = _add_scaled(stress_sum, area, stress_global)
-            normal[0] += area * tri.normal[0]
-            normal[1] += area * tri.normal[1]
-            normal[2] += area * tri.normal[2]
+            normal_sum = (
+                normal_sum[0] + area * triangle.normal[0],
+                normal_sum[1] + area * triangle.normal[1],
+                normal_sum[2] + area * triangle.normal[2],
+            )
             total_rest_area = total_rest_area + rest_area
             total_area = total_area + area
             iso, aniso = _compute_energy_densities(strain, fibre, lame)
             energy_iso += iso * rest_area
             energy_aniso += aniso * rest_area
         # Cell means, normal, principal axes and scalars.
-        _store_mean(strain_mean, strain_sum, total_area)
-        _store_mean(stress_mean, stress_sum, total_area)
-        _finish_normal(normal, total_area)
+        _write_mean(strain_mean, strain_sum, total_area)
+        _write_mean(stress_mean, stress_sum, total_area)
+        normal = _compute_unit_normal(normal_sum, total_area)
         cells.stress_tensor[c] = stress_mean
         cells.strain_tensor[c] = strain_mean
         cells.normal[c, 0] = normal[0]
         cells.normal[c, 1] = normal[1]
         cells.normal[c, 2] = normal[2]
-        normal_vector = (normal[0], normal[1], normal[2])
         first, second, s1, s2 = _find_principal_stress(
-            stress_mean, eigenvectors, scratch, normal_vector
+            stress_mean, eigenvectors, scratch, normal
         )
         cells.von_mises_stress[c] = np.sqrt(s1 * s1 + s2 * s2 - s1 * s2)
         cells.stress_anisotropy[c] = 0.0 if abs(s1) < _ZERO_STRESS else 1 - abs(s2 / s1)
@@ -134,7 +139,7 @@ def update_cell_stress(
         cells.stress_max[c] = s1
         cells.stress_second[c] = s2
         axis, perpendicular, e1, e2 = _find_principal_strain(
-            strain_mean, eigenvectors, scratch, normal_vector
+            strain_mean, eigenvectors, scratch, normal
         )
         cells.strain_anisotropy[c] = 0.0 if abs(e1) < _ZERO_STRESS else 1 - abs(e2 / e1)
         cells.strain_direction[c] = axis
@@ -148,16 +153,13 @@ def update_cell_stress(
         cells.rest_area[c] = total_rest_area
         cells.energy_isotropic[c] = energy_iso / total_rest_area
         cells.energy_anisotropic[c] = energy_aniso / total_rest_area
+        cells.young_transverse[c] = energy_aniso / total_rest_area
 
 
 @numba.njit(cache=True)
-def _compute_almansi_strain(gradient: Matrix2) -> Matrix2:
-    """Returns e = (I - B⁻¹) / 2 from the left Cauchy-Green tensor B = F Fᵀ."""
-    (f00, f01), (f10, f11) = gradient
-    b00 = f00 * f00 + f01 * f01
-    b01 = f00 * f10 + f01 * f11
-    b10 = f10 * f00 + f11 * f01
-    b11 = f10 * f10 + f11 * f11
+def _compute_almansi_strain(left_cauchy_green: Matrix2) -> Matrix2:
+    """Returns e = (I - B⁻¹) / 2 for B = F Fᵀ."""
+    (b00, b01), (b10, b11) = left_cauchy_green
     det_b = b00 * b11 - b10 * b01
     return (
         (0.5 * (1 - (b11 / det_b)), 0.5 * b01 / det_b),
@@ -168,42 +170,33 @@ def _compute_almansi_strain(gradient: Matrix2) -> Matrix2:
 @numba.njit(cache=True)
 def _compute_cauchy_stress(
     gradient: Matrix2,
+    left_cauchy_green: Matrix2,
     strain: Matrix2,
     fibre: tuple[float, float],
     lame: Lame,
     area_factor: float,
 ) -> Matrix2:
-    """Cauchy stress σ = (A_rest / A) F S Fᵀ with S the Saint Venant-Kirchhoff stress
-    of the transverse material plus the fibre stress (Tissue's `Sigma` + `deltaS`,
-    KNOWN_ISSUES T6)."""
-    (f00, f01), (f10, f11) = gradient
+    """Cauchy stress σ = (A_rest / A) F S Fᵀ, with S the Saint Venant-Kirchhoff stress
+    of the transverse material plus the fibre stress (KNOWN_ISSUES T6)."""
+    (b00, b01), (b10, b11) = left_cauchy_green
+    (bb00, bb01), (bb10, bb11) = multiply(left_cauchy_green, left_cauchy_green)
     mu_t = lame.mu_t
-    b00 = f00 * f00 + f01 * f01
-    b01 = f00 * f10 + f01 * f11
-    b10 = f10 * f00 + f11 * f01
-    b11 = f10 * f10 + f11 * f11
-    bb00 = b00 * b00 + b01 * b10
-    bb01 = b00 * b01 + b01 * b11
-    bb10 = b10 * b00 + b11 * b10
-    bb11 = b10 * b01 + b11 * b11
     # Isotropic part written through B: λ tr E · B + μ (B² - B).
     g = lame.lambda_t * (strain[0][0] + strain[1][1]) - mu_t
     sg00 = area_factor * (g * b00 + mu_t * bb00)
     sg01 = area_factor * (g * b01 + mu_t * bb01)
     sg10 = area_factor * (g * b10 + mu_t * bb10)
     sg11 = area_factor * (g * b11 + mu_t * bb11)
-    (ds00, ds01), (ds10, ds11) = compute_anisotropic_stress(
+    fibre_stress = compute_anisotropic_stress(
         strain, fibre, lame.lambda_l - lame.lambda_t, lame.mu_l - lame.mu_t
     )
-    dsf00 = ds00 * f00 + ds01 * f01
-    dsf10 = ds10 * f00 + ds11 * f01
-    dsf01 = ds00 * f10 + ds01 * f11
-    dsf11 = ds10 * f10 + ds11 * f11
-    dsg00 = area_factor * (f00 * dsf00 + f01 * dsf10)
-    dsg10 = area_factor * (f10 * dsf00 + f11 * dsf10)
-    dsg01 = area_factor * (f00 * dsf01 + f01 * dsf11)
-    dsg11 = area_factor * (f10 * dsf01 + f11 * dsf11)
-    return (sg00 + dsg00, sg01 + dsg01), (sg10 + dsg10, sg11 + dsg11)
+    (d00, d01), (d10, d11) = multiply(
+        gradient, multiply(fibre_stress, transpose(gradient))
+    )
+    return (
+        (sg00 + area_factor * d00, sg01 + area_factor * d01),
+        (sg10 + area_factor * d10, sg11 + area_factor * d11),
+    )
 
 
 @numba.njit(cache=True)
@@ -211,12 +204,9 @@ def _compute_energy_densities(
     strain: Matrix2, fibre: tuple[float, float], lame: Lame
 ) -> tuple[float, float]:
     """Isotropic and fibre strain energy per rest area (Tissue's `StrainEnergyIso`,
-    `StrainEnergyAniso`), with the invariants tr E, tr E² and aᵀE²a."""
-    (e00, e01), (e10, e11) = strain
-    squared = (
-        (e00 * e00 + e01 * e10, e00 * e01 + e01 * e11),
-        (e10 * e00 + e11 * e10, e10 * e01 + e11 * e11),
-    )
+    `StrainEnergyAniso`), from the invariants tr E, tr E² and aᵀE²a."""
+    (e00, _), (_, e11) = strain
+    squared = multiply(strain, strain)
     trace = e00 + e11
     trace_squared = squared[0][0] + squared[1][1]
     fibre_strain = compute_fibre_strain(strain, fibre)
@@ -230,13 +220,15 @@ def _compute_energy_densities(
 
 
 @numba.njit(cache=True)
-def _rotate_to_global(tri: TriangleGeometry, local: Matrix2) -> Matrix3:
-    """Returns R L Rᵀ for the in-plane tensor L, with R the frame (x axis, y axis,
-    normal) as columns, summing as Tissue does: from 0.0 and including the
-    products with L's zero row and column, so that signed zeros match."""
-    row0 = (tri.x_axis[0], tri.y_axis[0], tri.normal[0])
-    row1 = (tri.x_axis[1], tri.y_axis[1], tri.normal[1])
-    row2 = (tri.x_axis[2], tri.y_axis[2], tri.normal[2])
+def _rotate_to_global(triangle: TriangleGeometry, local: Matrix2) -> Matrix3:
+    """Returns R L Rᵀ for the in-plane tensor L and the frame R = (x, y, normal).
+
+    Sums as Tissue does: from 0.0 and over L's zero row and column, so that signed
+    zeros match.
+    """
+    row0 = (triangle.x_axis[0], triangle.y_axis[0], triangle.normal[0])
+    row1 = (triangle.x_axis[1], triangle.y_axis[1], triangle.normal[1])
+    row2 = (triangle.x_axis[2], triangle.y_axis[2], triangle.normal[2])
     column0 = (local[0][0], local[1][0], 0.0)
     column1 = (local[0][1], local[1][1], 0.0)
     column2 = (0.0, 0.0, 0.0)
@@ -303,7 +295,7 @@ def _add_scaled(total: Matrix3, weight: float, tensor: Matrix3) -> Matrix3:
 
 
 @numba.njit(cache=True)
-def _store_mean(target: FloatArray, total: Matrix3, divisor: float) -> None:
+def _write_mean(target: FloatArray, total: Matrix3, divisor: float) -> None:
     """Writes total / divisor into the 3×3 array, dividing each entry."""
     for r in range(3):
         for q in range(3):
@@ -311,16 +303,11 @@ def _store_mean(target: FloatArray, total: Matrix3, divisor: float) -> None:
 
 
 @numba.njit(cache=True)
-def _finish_normal(normal: FloatArray, total_area: float) -> None:
-    """Turns the area-weighted normal sum into the unit cell normal (0 stays 0)."""
-    for r in range(3):
-        normal[r] /= total_area
-    length = np.sqrt(
-        normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]
-    )
-    if length > 0:
-        for r in range(3):
-            normal[r] /= length
+def _compute_unit_normal(total: Vector, total_area: float) -> Vector:
+    """Returns the unit cell normal from the area-weighted sum (0 stays 0)."""
+    mean = divide(total, total_area)
+    length = norm(mean)
+    return divide(mean, length) if length > 0 else mean
 
 
 @numba.njit(cache=True)
@@ -330,18 +317,14 @@ def _find_principal_stress(
     scratch: FloatArray,
     normal: Vector,
 ) -> tuple[int, int, float, float]:
-    """Diagonalises the cell stress in place and returns the columns of the two
+    """Diagonalises the cell stress in place; returns the columns of the two
     in-plane principal axes and their stresses, largest magnitude first."""
     _jacobi(stress, eigenvectors, True, scratch)
     first, second, third = _rank_principal_axes(stress, True)
     s1 = stress[first, first]
     s2 = stress[second, second]
-    out_of_plane = (
-        normal[0] * eigenvectors[0, first]
-        + normal[1] * eigenvectors[1, first]
-        + normal[2] * eigenvectors[2, first]
-    )
-    if abs(out_of_plane) > _OUT_OF_PLANE:
+    axis = (eigenvectors[0, first], eigenvectors[1, first], eigenvectors[2, first])
+    if abs(dot(normal, axis)) > _OUT_OF_PLANE:
         first, second = second, third
         s1, s2 = s2, stress[third, third]
     return first, second, s1, s2
@@ -354,8 +337,8 @@ def _find_principal_strain(
     scratch: FloatArray,
     normal: Vector,
 ) -> tuple[Vector, Vector, float, float]:
-    """Diagonalises the cell strain in place and returns the principal axis, the
-    in-plane perpendicular axis (unnormalised, KNOWN_ISSUES T9) and the two strains."""
+    """Diagonalises the cell strain in place; returns the principal axis, the
+    in-plane perpendicular (unnormalised, KNOWN_ISSUES T9) and the two strains."""
     _jacobi(strain, eigenvectors, False, scratch)
     first, second, _ = _rank_principal_axes(strain, False)
     axis = (eigenvectors[0, first], eigenvectors[1, first], eigenvectors[2, first])
@@ -367,9 +350,11 @@ def _find_principal_strain(
 
 @numba.njit(cache=True)
 def _rank_principal_axes(diagonal: FloatArray, cyclic: bool) -> tuple[int, int, int]:
-    """Orders the axes of a diagonalised tensor by |value| as Tissue does (T5):
-    the largest first; on a tie between the other two, the stress loop (`cyclic`)
-    keeps cyclic order and the strain loop ascending order."""
+    """Orders the axes of a diagonalised tensor by |value| (KNOWN_ISSUES T5).
+
+    On a tie between the two smaller ones, the stress loop (`cyclic`) keeps cyclic
+    order and the strain loop ascending order.
+    """
     first = 0
     if abs(diagonal[1, 1]) > abs(diagonal[first, first]):
         first = 1
@@ -405,10 +390,10 @@ def _rotate(
     small: int,
     scratch: FloatArray,
 ) -> None:
-    """Applies Tissue's Jacobi rotation in the (small, big) plane to the tensor and
-    accumulates it into the eigenvectors (KNOWN_ISSUES T4: the sign is lost).
+    """Applies Tissue's Jacobi rotation in the (small, big) plane in place.
 
-    Skipping Tissue's exact products with 0 and 1 leaves the result bit-identical.
+    The rotation sign is lost as in Tissue (KNOWN_ISSUES T4). Skipping Tissue's
+    exact products with 0 and 1 leaves the result bit-identical.
     """
     if abs(tensor[big, big] - tensor[small, small]) < _EIGEN_TOLERANCE:
         si = _C45
@@ -450,7 +435,7 @@ def _jacobi(
     pivot_at_top: bool,
     scratch: FloatArray,
 ) -> None:
-    """Diagonalises the tensor in place; columns of `eigenvectors` become unit
+    """Diagonalises the tensor in place; the columns of `eigenvectors` become unit
     eigenvectors.
 
     `pivot_at_top` reproduces the stress loop, which tests the previous pivot and so
@@ -470,11 +455,7 @@ def _jacobi(
             _rotate(tensor, eigenvectors, big, small, scratch)
             pivot, big, small = _pick_pivot(tensor)
     for q in range(3):
-        length = np.sqrt(
-            eigenvectors[0, q] * eigenvectors[0, q]
-            + eigenvectors[1, q] * eigenvectors[1, q]
-            + eigenvectors[2, q] * eigenvectors[2, q]
-        )
+        length = norm((eigenvectors[0, q], eigenvectors[1, q], eigenvectors[2, q]))
         if length > 0:
             for r in range(3):
                 eigenvectors[r, q] /= length

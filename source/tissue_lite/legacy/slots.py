@@ -41,6 +41,33 @@ _UNUSED = [12, 13, 14, 15, VOLUME_CHANGE]
 _SECOND_AXES = [26, 27, 28, 29, 31]
 _VOLUME_CELLS = slice(1, 4)
 
+# Field → slot, in the order Tissue writes them (the second axes overwrite the normal).
+_FIELD_SLOTS: dict[str, int | slice] = {
+    "microtubule": MICROTUBULE,
+    "growth_signal": GROWTH_SIGNAL,
+    "stress_direction": STRESS_DIRECTION,
+    "stress_max": STRESS_MAX,
+    "strain_direction": STRAIN_DIRECTION,
+    "strain_max": STRAIN_MAX,
+    "young_longitudinal": YOUNG_LONGITUDINAL,
+    "strain_anisotropy": STRAIN_ANISOTROPY,
+    "stress_anisotropy": STRESS_ANISOTROPY,
+    "rest_area": REST_AREA,
+    "young_transverse": YOUNG_TRANSVERSE,
+    "von_mises_stress": VON_MISES_STRESS,
+    "velocity": VELOCITY,
+    "angle_mt_stress": ANGLE_MT_STRESS,
+    "angle_stress_strain": ANGLE_STRESS_STRAIN,
+    "growth_count": GROWTH_COUNT,
+    "normal": NORMAL,
+}
+_SECOND_AXES_SLOTS: dict[str, int | slice] = {
+    "strain_perpendicular": STRAIN_PERPENDICULAR,
+    "strain_second": STRAIN_SECOND,
+    "stress_direction_second": STRESS_DIRECTION_SECOND,
+    "stress_second": STRESS_SECOND,
+}
+
 
 @dataclass(frozen=True)
 class SlotLayout:
@@ -54,6 +81,15 @@ class SlotLayout:
 
     second_axes: bool = False
     concentration_slot: int | None = None
+
+    def field_slots(self) -> dict[str, int | slice]:
+        """Returns each stored `CellState` field's slot, in Tissue's write order."""
+        slots = dict(_FIELD_SLOTS)
+        if self.second_axes:
+            slots |= _SECOND_AXES_SLOTS
+        if self.concentration_slot is not None:
+            slots["concentration"] = self.concentration_slot
+        return slots
 
     def extra_columns(self, num_columns: int) -> list[int]:
         """Returns the columns `CellState.extra` carries, in order."""
@@ -72,97 +108,39 @@ class SlotLayout:
         num_cells, num_columns = values.shape
         if num_columns < NUM_SLOTS:
             raise ValueError(f"Tissue models need at least {NUM_SLOTS} cell variables")
-        none3 = np.zeros((num_cells, 3))
-        none1 = np.zeros(num_cells)
-        v = values
-
-        def column(index: int | slice, used: bool = True) -> FloatArray:
-            if not used:
-                return none1.copy() if isinstance(index, int) else none3.copy()
-            return v[:, index].copy()
-
-        return CellState(
-            microtubule=column(MICROTUBULE),
-            growth_signal=column(GROWTH_SIGNAL),
-            young_longitudinal=column(YOUNG_LONGITUDINAL),
-            young_transverse=column(YOUNG_TRANSVERSE),
-            stress_direction=column(STRESS_DIRECTION),
-            stress_max=column(STRESS_MAX),
-            stress_direction_second=column(STRESS_DIRECTION_SECOND, self.second_axes),
-            stress_second=column(STRESS_SECOND, self.second_axes),
-            stress_anisotropy=column(STRESS_ANISOTROPY),
-            von_mises_stress=column(VON_MISES_STRESS),
-            strain_direction=column(STRAIN_DIRECTION),
-            strain_max=column(STRAIN_MAX),
-            strain_perpendicular=column(STRAIN_PERPENDICULAR, self.second_axes),
-            strain_second=column(STRAIN_SECOND, self.second_axes),
-            strain_anisotropy=column(STRAIN_ANISOTROPY),
-            normal=column(NORMAL),
-            rest_area=column(REST_AREA),
-            energy_isotropic=none1.copy(),
-            energy_anisotropic=column(YOUNG_TRANSVERSE),
-            stress_tensor=np.zeros((num_cells, 3, 3)),
-            strain_tensor=np.zeros((num_cells, 3, 3)),
-            velocity=column(VELOCITY),
-            angle_mt_stress=column(ANGLE_MT_STRESS),
-            angle_stress_strain=column(ANGLE_STRESS_STRAIN),
-            growth_count=column(GROWTH_COUNT),
-            concentration=none1.copy()
-            if self.concentration_slot is None
-            else column(self.concentration_slot),
-            volume_change=_read_volume_change(v),
-            extra=v[:, self.extra_columns(num_columns)].copy(),
+        extra_columns = self.extra_columns(num_columns)
+        return CellState.zeros(num_cells, len(extra_columns))._replace(
+            **{
+                name: values[:, slot].copy()
+                for name, slot in self.field_slots().items()
+            },
+            volume_change=_extract_volume_change(values),
+            extra=values[:, extra_columns].copy(),
         )
 
     def to_cell_variables(self, tissue: Tissue) -> FloatArray:
         """Returns Tissue's (C, n) cell variables, writing slots in Tissue's order.
 
-        Slot 20 holds the transverse modulus, or the anisotropic energy when the
-        model softens walls (Tissue then never writes the modulus).
+        A state built without legacy columns (`CellState.zeros`) leaves them 0.
         """
         cells = tissue.cells
         extra_base = len(_UNUSED) + (0 if self.second_axes else len(_SECOND_AXES))
         num_columns = NUM_SLOTS + max(0, cells.extra.shape[1] - extra_base)
         if self.concentration_slot is not None:
             num_columns = max(num_columns + 1, self.concentration_slot + 1)
-        v = np.zeros((cells.num_cells, num_columns))
-        # A state built without legacy columns (`CellState.zeros`) leaves them 0.
+        cell_variables = np.zeros((cells.num_cells, num_columns))
         columns = self.extra_columns(num_columns)
         width = min(len(columns), cells.extra.shape[1])
-        v[:, columns[:width]] = cells.extra[:, :width]
-        v[:, MICROTUBULE] = cells.microtubule
-        v[:, GROWTH_SIGNAL] = cells.growth_signal
-        v[:, STRESS_DIRECTION] = cells.stress_direction
-        v[:, STRESS_MAX] = cells.stress_max
-        v[:, STRAIN_DIRECTION] = cells.strain_direction
-        v[:, STRAIN_MAX] = cells.strain_max
-        v[:, YOUNG_LONGITUDINAL] = cells.young_longitudinal
-        v[:, STRAIN_ANISOTROPY] = cells.strain_anisotropy
-        v[:, STRESS_ANISOTROPY] = cells.stress_anisotropy
-        v[:, REST_AREA] = cells.rest_area
-        v[:, YOUNG_TRANSVERSE] = (
-            cells.young_transverse
-            if self.concentration_slot is None
-            else cells.energy_anisotropic
-        )
-        v[:, VON_MISES_STRESS] = cells.von_mises_stress
-        v[:, VELOCITY] = cells.velocity
-        v[:, ANGLE_MT_STRESS] = cells.angle_mt_stress
-        v[:, ANGLE_STRESS_STRAIN] = cells.angle_stress_strain
-        v[_VOLUME_CELLS, VOLUME_CHANGE] = cells.volume_change[: cells.num_cells - 1]
-        v[:, GROWTH_COUNT] = cells.growth_count
-        v[:, NORMAL] = cells.normal
-        if self.second_axes:
-            v[:, STRAIN_PERPENDICULAR] = cells.strain_perpendicular
-            v[:, STRAIN_SECOND] = cells.strain_second
-            v[:, STRESS_DIRECTION_SECOND] = cells.stress_direction_second
-            v[:, STRESS_SECOND] = cells.stress_second
-        if self.concentration_slot is not None:
-            v[:, self.concentration_slot] = cells.concentration
-        return v
+        cell_variables[:, columns[:width]] = cells.extra[:, :width]
+        for name, slot in self.field_slots().items():
+            cell_variables[:, slot] = getattr(cells, name)
+        cell_variables[_VOLUME_CELLS, VOLUME_CHANGE] = cells.volume_change[
+            : cells.num_cells - 1
+        ]
+        return cell_variables
 
 
-def _read_volume_change(values: FloatArray) -> FloatArray:
+def _extract_volume_change(values: FloatArray) -> FloatArray:
     """Returns the volume-change diagnostic from slot 25 of cells 1-3."""
     volume_change = np.zeros(3)
     stored = values[_VOLUME_CELLS, VOLUME_CHANGE]

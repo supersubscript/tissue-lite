@@ -59,16 +59,16 @@ result = simulate(model, read_init(Path("templ.init")), t_end=20.0, n_frames=10)
 cells = result.final.cells
 ```
 
-Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.model_file.read_model_file`). Per-cell state is named (`tissue.CellState`); Tissue's slot numbering lives only in `legacy.slots.SlotLayout`, used by the `.init` reader and writer and the VTU writer, so files and readers such as `flower.output` work unchanged.
+Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.model_file.read_model_file`). Per-cell state is named (`tissue.CellState`); Tissue's slot numbering lives only in `legacy.slots.SlotLayout`, used by the `.init` reader and writer and by `output.VtuWriter` (pass one as `writer=` to `simulate` for VTU frames), so files and readers such as `flower.output` work unchanged.
 
 ## Modules
 
 | Module | Owns |
 |---|---|
-| `topology`, `tissue`, `triangles` | Mesh connectivity, state (`Tissue`, `CellState`), centre-triangle index arrays |
+| `topology`, `tissue`, `triangles` | Mesh connectivity, state (`Tissue`, `CellState`), centre triangles (`TriangleMesh`) and their kinematics |
 | `material`, `forces`, `stress` | Membrane, pressure and boundary parameters; force kernels; stress and strain update |
 | `feedback`, `growth`, `diagnostics` | Fibre and MT feedback, wall growth, velocity/angle/volume diagnostics |
-| `model` | `MeristemModel` and `ModelState`, which evaluates the reactions in Tissue's order |
+| `model` | `MeristemModel` and `ModelState` (positions, centre triangles, reaction state), which evaluates the reactions in Tissue's order |
 | `solvers` | `Stepper` protocol, `CashKarp`, `simulate` |
 | `legacy` | Slot numbering, `.init`, `.model` and solver files |
 | `output`, `cli`, `rand` | VTU/PVD writer, command line, glibc `rand()` |

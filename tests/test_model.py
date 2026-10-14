@@ -44,11 +44,7 @@ def test_no_forces_at_rest_without_pressure() -> None:
         boundary=Boundary(fixed_axes=()),
     )
     state = _rest_state(model)
-    vd, cd = state.compute_forces(
-        state.tissue.cells, state.triangulation.centres, state.tissue.vertices
-    )
-    np.testing.assert_allclose(vd, 0.0, atol=1e-10)
-    np.testing.assert_allclose(cd, 0.0, atol=1e-10)
+    np.testing.assert_allclose(state.compute_forces(), 0.0, atol=1e-10)
 
 
 def test_internal_forces_balance() -> None:
@@ -58,12 +54,9 @@ def test_internal_forces_balance() -> None:
         boundary=Boundary(fixed_axes=()),
     )
     state = _rest_state(model)
-    stretched = state.tissue.vertices * 1.05
-    vd, cd = state.compute_forces(
-        state.tissue.cells, state.triangulation.centres * 1.05, stretched
-    )
-    assert np.abs(vd).max() > 1e-3
-    np.testing.assert_allclose(vd.sum(0) + cd.sum(0), 0.0, atol=1e-9)
+    derivatives = state.compute_forces_at(state.tissue.cells, state.positions * 1.05)
+    assert np.abs(derivatives).max() > 1e-3
+    np.testing.assert_allclose(derivatives.sum(0), 0.0, atol=1e-9)
 
 
 @pytest.mark.parametrize("axes", [(0, 1, 2), (2,)])
@@ -75,9 +68,7 @@ def test_boundary_vertices_do_not_move_along_fixed_axes(axes: tuple[int, ...]) -
     )
     state = _rest_state(model)
     state.update(1.0)
-    vd, _ = state.compute_forces(
-        state.tissue.cells, state.triangulation.centres, state.tissue.vertices
-    )
+    vd = state.compute_forces()[: state.tissue.topology.num_vertices]
     edge = state.tissue.topology.boundary
     np.testing.assert_array_equal(vd[edge][:, list(axes)], 0.0)
     assert np.abs(vd[~edge]).max() > 0
@@ -105,8 +96,7 @@ def test_softening_scales_forces() -> None:
         t.cells.concentration[:] = concentration
         t.vertices *= 1.02
         state = ModelState(model=model, tissue=t)
-        vd, _ = state.compute_forces(t.cells, state.triangulation.centres, t.vertices)
-        return float(np.abs(vd).max())
+        return float(np.abs(state.compute_forces()).max())
 
     # Hill repression 1 - c^2 / (4 + c^2): 1 at c = 0, 0.5 at c = K = 2.
     assert max_force(2.0) == pytest.approx(0.5 * max_force(0.0), rel=1e-6)
@@ -114,9 +104,7 @@ def test_softening_scales_forces() -> None:
 
 def test_cell_stress_after_update() -> None:
     state = case_state(CASES_DIR / "sweep_120_120")
-    state.compute_forces(
-        state.tissue.cells, state.triangulation.centres, state.tissue.vertices
-    )
+    state.compute_forces()
     state.update(1e-3)
     cells = state.tissue.cells
     n = state.tissue.topology.num_cells

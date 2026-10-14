@@ -3,8 +3,7 @@
 Ports `CenterTriangulation::WallGrowth::StrainTRBS` (double rest lengths) from Tissue
 e74e457, including its hard-coded inputs: the growth axis is the microtubule axis
 and the two compared values are `growth_signal` and `stress_max` (KNOWN_ISSUES
-G1-G3). Its velocity threshold is read but never used by Tissue. Every expression
-keeps Tissue's evaluation order so that results are bit-identical.
+G1-G3). Its velocity threshold is read but never used by Tissue.
 """
 
 from dataclasses import dataclass
@@ -13,17 +12,22 @@ import numba
 import numpy as np
 
 from tissue_lite.arrays import FloatArray
-from tissue_lite.material import pull_back_direction
 from tissue_lite.tissue import CellState
 from tissue_lite.triangles import (
     TriangleGeometry,
     TriangleMesh,
     Vector,
+    compute_cosine,
     compute_deformation_gradient,
     compute_shape_vectors,
     compute_triangle_geometry,
     get_rest_lengths,
+    pull_back_direction,
 )
+
+type EdgeComponents = tuple[
+    tuple[float, float], tuple[float, float], tuple[float, float]
+]  # (along, across) of the edges centre-a, a-b, b-centre
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,7 @@ def update_growth(
     rate: float,
     threshold: float,
 ) -> None:
-    """Applies one explicit growth update of length h to the double rest lengths.
+    """Applies one explicit growth update of length h to the rest lengths in `mesh`.
 
     Each triangle's three rest edges are split into components along and across
     the growth axis; the component whose signal exceeds `threshold` grows by
@@ -61,11 +65,14 @@ def update_growth(
             cells.microtubule[c, 2],
         )
         for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
-            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            triangle = compute_triangle_geometry(mesh, centres, vertices, c, t)
             rest_lengths = get_rest_lengths(mesh, t)
             rest_plane = _compute_plane_by_angle(rest_lengths)
             direction = _compute_growth_direction(
-                tri, _compute_plane_by_angle(tri.lengths), rest_plane, growth_axis
+                triangle,
+                _compute_plane_by_angle(triangle.lengths),
+                rest_plane,
+                growth_axis,
             )
             components = _split_rest_edges(rest_plane, rest_lengths, direction)
             components, count = _grow_components(
@@ -78,28 +85,25 @@ def update_growth(
             mesh.spokes[t, 1] = spoke_b
 
 
-type EdgeComponents = tuple[
-    tuple[float, float], tuple[float, float], tuple[float, float]
-]  # (along, across) of the edges centre-a, a-b, b-centre
-
-
 @numba.njit(cache=True)
 def _compute_plane_by_angle(lengths: Vector) -> Vector:
     """`compute_plane_coordinates` as the growth reaction writes it: through acos,
     cos and sin, which differ from cos and sqrt(1 - cos²) in the last bits."""
     to_a, wall, to_b = lengths
-    angle = np.arccos((to_a * to_a + wall * wall - to_b * to_b) / (to_a * wall * 2))
+    angle = np.arccos(compute_cosine(to_a, wall, to_b))
     return np.cos(angle) * to_a, wall, np.sin(angle) * to_a
 
 
 @numba.njit(cache=True)
 def _compute_growth_direction(
-    tri: TriangleGeometry, plane: Vector, rest_plane: Vector, growth_axis: Vector
+    triangle: TriangleGeometry, plane: Vector, rest_plane: Vector, growth_axis: Vector
 ) -> tuple[float, float]:
     """Unit growth axis in the rest plane; divides by zero when it is out of plane
     (no random fallback here, unlike the membrane)."""
     gradient = compute_deformation_gradient(plane, compute_shape_vectors(rest_plane))
-    g0, g1 = pull_back_direction(gradient, tri.x_axis, tri.y_axis, growth_axis)
+    g0, g1 = pull_back_direction(
+        gradient, triangle.x_axis, triangle.y_axis, growth_axis
+    )
     length = np.sqrt(g0 * g0 + g1 * g1)
     return g0 / length, g1 / length
 
@@ -119,11 +123,11 @@ def _split_rest_edges(
     rest_plane: Vector, rest_lengths: Vector, direction: tuple[float, float]
 ) -> EdgeComponents:
     """Splits the edges centre-a, a-b and b-centre of the rest triangle."""
-    a, b, c = rest_plane
+    centre_x, wall, centre_y = rest_plane
     return (
-        _split_edge((-a, -c), rest_lengths[0], direction),
-        _split_edge((b, 0.0), rest_lengths[1], direction),
-        _split_edge((a - b, c), rest_lengths[2], direction),
+        _split_edge((-centre_x, -centre_y), rest_lengths[0], direction),
+        _split_edge((wall, 0.0), rest_lengths[1], direction),
+        _split_edge((centre_x - wall, centre_y), rest_lengths[2], direction),
     )
 
 
@@ -170,13 +174,13 @@ def _grow_edge(
 def _compute_edge_lengths(components: EdgeComponents) -> Vector:
     """Returns the rest lengths of the edges centre-a, a-b and b-centre."""
     return (
-        np.sqrt(
-            components[0][0] * components[0][0] + components[0][1] * components[0][1]
-        ),
-        np.sqrt(
-            components[1][0] * components[1][0] + components[1][1] * components[1][1]
-        ),
-        np.sqrt(
-            components[2][0] * components[2][0] + components[2][1] * components[2][1]
-        ),
+        _compute_length(components[0]),
+        _compute_length(components[1]),
+        _compute_length(components[2]),
     )
+
+
+@numba.njit(cache=True)
+def _compute_length(edge: tuple[float, float]) -> float:
+    """Returns the length of an (along, across) pair."""
+    return np.sqrt(edge[0] * edge[0] + edge[1] * edge[1])

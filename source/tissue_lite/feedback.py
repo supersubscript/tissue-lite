@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
 import numba
-import numpy as np
 
 from tissue_lite.arrays import FloatArray
 from tissue_lite.material import TRBSMembrane
 from tissue_lite.tissue import CellState
+from tissue_lite.triangles import dot, norm
 
 type Coupling = Literal["linear", "hill", "hill_direct"]
 type Initialisation = Literal["none", "isotropic", "anisotropic"]
@@ -20,7 +20,7 @@ type Initialisation = Literal["none", "isotropic", "anisotropic"]
 COUPLING_CODES: dict[Coupling, int] = {"linear": 0, "hill": 1, "hill_direct": 2}
 
 
-class FibreKernel(NamedTuple):
+class FibreParameters(NamedTuple):
     """`FibreStiffness` as the kernel takes it."""
 
     rate: float
@@ -32,7 +32,7 @@ class FibreKernel(NamedTuple):
     young_fibre: float
 
 
-class MicrotubuleKernel(NamedTuple):
+class MicrotubuleParameters(NamedTuple):
     """`MicrotubuleAlignment` as the kernel takes it.
 
     Gate levels: 0 none, 1 velocity, 2 velocity and stress difference.
@@ -70,10 +70,10 @@ class FibreStiffness:
             membrane.young_fibre if self.young_fibre is None else self.young_fibre,
         )
 
-    def to_kernel(self, membrane: TRBSMembrane) -> FibreKernel:
+    def to_kernel(self, membrane: TRBSMembrane) -> FibreParameters:
         """Flattens the definition for `update_fibres`."""
         young_matrix, young_fibre = self.get_moduli(membrane)
-        return FibreKernel(
+        return FibreParameters(
             rate=self.rate,
             coupling=COUPLING_CODES[self.coupling],
             k_hill=self.k_hill,
@@ -103,13 +103,13 @@ class MicrotubuleAlignment:
         ):
             raise ValueError("stress_difference_threshold needs velocity_threshold")
 
-    def to_kernel(self) -> MicrotubuleKernel:
+    def to_kernel(self) -> MicrotubuleParameters:
         """Flattens the definition for `update_microtubules`."""
         if self.velocity_threshold is None:
-            return MicrotubuleKernel(self.rate, 0, 0.0, 0.0)
+            return MicrotubuleParameters(self.rate, 0, 0.0, 0.0)
         if self.stress_difference_threshold is None:
-            return MicrotubuleKernel(self.rate, 1, self.velocity_threshold, 0.0)
-        return MicrotubuleKernel(
+            return MicrotubuleParameters(self.rate, 1, self.velocity_threshold, 0.0)
+        return MicrotubuleParameters(
             self.rate, 2, self.velocity_threshold, self.stress_difference_threshold
         )
 
@@ -140,7 +140,7 @@ def initiate_fibres(
 
 
 @numba.njit(cache=True)
-def update_fibres(cells: CellState, h: float, fibres: FibreKernel) -> None:
+def update_fibres(cells: CellState, h: float, fibres: FibreParameters) -> None:
     """Applies one explicit fibre-stiffness update of length h."""
     rate, coupling, k, n, velocity_threshold, young_matrix, young_fibre = fibres
     if rate == 0.0:
@@ -170,7 +170,7 @@ def initiate_microtubules(cells: CellState) -> None:
 
 @numba.njit(cache=True)
 def update_microtubules(
-    cells: CellState, h: float, microtubules: MicrotubuleKernel
+    cells: CellState, h: float, microtubules: MicrotubuleParameters
 ) -> None:
     """Applies one explicit microtubule update of length h."""
     rate, gate_level, velocity_threshold, stress_difference_threshold = microtubules
@@ -186,17 +186,12 @@ def update_microtubules(
             diff = abs((s_max - cells.von_mises_stress[c]) / s_max)
             if not diff > stress_difference_threshold:
                 continue
-        dot = 0.0
-        for d in range(3):
-            dot += mt[c, d] * target[c, d]
-        if dot < 0:
+        axis = (mt[c, 0], mt[c, 1], mt[c, 2])
+        if dot(axis, (target[c, 0], target[c, 1], target[c, 2])) < 0:
             for d in range(3):
                 mt[c, d] *= -1
         for d in range(3):
             mt[c, d] += rate * h * (target[c, d] - mt[c, d])
-        norm = 0.0
+        scale = 1.0 / norm((mt[c, 0], mt[c, 1], mt[c, 2]))
         for d in range(3):
-            norm += mt[c, d] * mt[c, d]
-        norm = 1.0 / np.sqrt(norm)
-        for d in range(3):
-            mt[c, d] *= norm
+            mt[c, d] *= scale

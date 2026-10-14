@@ -7,15 +7,12 @@ from conftest import CASES_DIR, case_state
 def test_growth_lengthens_rest_lengths_under_tension() -> None:
     state = case_state(CASES_DIR / "aniso_growth")
     tissue = state.tissue
-    tissue.vertices *= 1.05
-    state.triangulation.centres[:] *= 1.05
-    spokes = state.triangulation.spokes.copy()
+    state.positions *= 1.05
+    spokes = state.mesh.spokes.copy()
     walls = tissue.wall_lengths.copy()
-    state.compute_forces(tissue.cells, state.triangulation.centres, tissue.vertices)
+    state.compute_forces()
     state.update(1e-3)
-    assert (tissue.wall_lengths >= walls).all() or (
-        state.triangulation.spokes >= spokes
-    ).all()
+    assert (tissue.wall_lengths >= walls).all() or (state.mesh.spokes >= spokes).all()
     assert (tissue.cells.growth_count >= 0).all()
 
 

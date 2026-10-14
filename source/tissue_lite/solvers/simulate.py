@@ -7,12 +7,10 @@ pin that (see KNOWN_ISSUES).
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
 from tissue_lite.arrays import FloatArray
-from tissue_lite.legacy.slots import SlotLayout
 from tissue_lite.model import MeristemModel, ModelState
 from tissue_lite.output import VtuWriter
 from tissue_lite.solvers.cash_karp import CashKarp
@@ -52,21 +50,16 @@ def simulate(
     n_frames: int = 100,
     solver: Stepper = CashKarp(),
     t_start: float = 0.0,
-    output_dir: Path | None = None,
-    slot_layout: SlotLayout = SlotLayout(),
+    writer: VtuWriter | None = None,
 ) -> SimulationResult:
     """Runs the model from t_start to t_end, printing n_frames frames as Tissue does.
 
-    The input tissue is not modified. With output_dir, frames are also written as
-    Tissue-compatible VTU files plus `tissue.pvd`, numbered by `slot_layout`.
+    The input tissue is not modified. A `writer` also receives every frame.
 
     Raises:
         ValueError: If the time span is empty.
         RuntimeError: If the step size underflows.
     """
-    writer = (
-        None if output_dir is None else VtuWriter(output_dir, n_frames, slot_layout)
-    )
     state = ModelState(model=model, tissue=tissue.copy())
     return integrate(state, t_start, t_end, n_frames, solver, writer)
 
@@ -86,7 +79,7 @@ def integrate(
     tissue = state.tissue
     frames: list[Frame] = []
     accepted = rejected = 0
-    tiny = run.time_slack
+    tiny = solver.time_slack
     print_time = t_end + tiny
     print_delta = t_end + 2.0 * tiny
     do_print = n_frames > 0
@@ -103,14 +96,12 @@ def integrate(
         frames.append(frame)
 
     while True:
-        vertex_forces, centre_forces = state.compute_forces(
-            tissue.cells, state.triangulation.centres, tissue.vertices
-        )
+        derivatives = state.compute_forces()
         if do_print and t >= print_time:
             print_time += print_delta
             emit()
         t_bound = t_end if t_end < print_time else print_time
-        result = run.step(t, t_bound, vertex_forces, centre_forces)
+        result = run.step(t, t_bound, derivatives)
         t = result.t
         if result.accepted:
             accepted += 1
@@ -118,9 +109,7 @@ def integrate(
             rejected += 1
         if t >= t_end:
             if do_print:
-                state.compute_forces(
-                    tissue.cells, state.triangulation.centres, tissue.vertices
-                )
+                state.compute_forces()
                 emit()
             logger.info("Simulation done: %d ok, %d bad steps", accepted, rejected)
             return SimulationResult(frames, accepted, rejected, tissue.copy())
@@ -136,31 +125,16 @@ def prerun_and_simulate(
     prerun_t_end: float = 1.0,
     prerun_frames: int = 2,
     prerun_solver: Stepper = CashKarp(),
-    output_dir: Path | None = None,
-    slot_layout: SlotLayout = SlotLayout(),
+    writer: VtuWriter | None = None,
 ) -> tuple[SimulationResult, SimulationResult]:
     """Reproduces flower-experiments' `prerunAndSim.sh`: prerun, then main run.
 
     The main run starts from the prerun's final state as Tissue re-reads it from
     `-init_output`: cell variables and positions kept, centre triangulation rebuilt.
+    Both runs write their frames through the same `writer`.
     """
     prerun = simulate(
-        prerun_model,
-        tissue,
-        prerun_t_end,
-        prerun_frames,
-        prerun_solver,
-        output_dir=output_dir,
-        slot_layout=slot_layout,
+        prerun_model, tissue, prerun_t_end, prerun_frames, prerun_solver, writer=writer
     )
-    start = prerun.final.without_triangulation()
-    main = simulate(
-        model,
-        start,
-        t_end,
-        n_frames,
-        solver,
-        output_dir=output_dir,
-        slot_layout=slot_layout,
-    )
+    main = simulate(model, prerun.final, t_end, n_frames, solver, writer=writer)
     return prerun, main

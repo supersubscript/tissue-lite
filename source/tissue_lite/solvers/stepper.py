@@ -23,25 +23,21 @@ class StepResult:
 class StepRun(Protocol):
     """One solver bound to one model state."""
 
-    time_slack: float
-    """Tolerance added to the frame schedule, as Tissue's `1e-9 * tolerance`."""
-
-    def step(
-        self,
-        t: float,
-        t_bound: float,
-        vertex_forces: FloatArray,
-        centre_forces: FloatArray,
-    ) -> StepResult:
+    def step(self, t: float, t_bound: float, derivatives: FloatArray) -> StepResult:
         """Advances the state from t to at most t_bound and applies `update`.
 
-        The forces are those of the current state, already evaluated by the driver
-        so that their diagnostics precede any frame written at t.
+        `derivatives` are those of the current state, already evaluated by the
+        driver so that their diagnostics precede any frame written at t.
         """
         ...
 
 
 class Stepper(Protocol):
     """A solver configuration."""
+
+    @property
+    def time_slack(self) -> float:
+        """Added to the frame schedule; Tissue's `1e-9 * tolerance`."""
+        ...
 
     def start(self, state: ModelState) -> StepRun: ...

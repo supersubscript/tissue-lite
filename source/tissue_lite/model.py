@@ -10,7 +10,6 @@ of every retained model file:
   growth.
 """
 
-import logging
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -20,10 +19,10 @@ import numpy as np
 from tissue_lite import diagnostics, feedback, forces, growth, stress
 from tissue_lite.arrays import BoolArray, FloatArray, IntArray
 from tissue_lite.feedback import (
-    FibreKernel,
+    FibreParameters,
     FibreStiffness,
     MicrotubuleAlignment,
-    MicrotubuleKernel,
+    MicrotubuleParameters,
 )
 from tissue_lite.growth import StrainGrowth
 from tissue_lite.material import (
@@ -34,15 +33,8 @@ from tissue_lite.material import (
     TRBSMembrane,
 )
 from tissue_lite.rand import make_rand_state
-from tissue_lite.tissue import (
-    CellState,
-    CentreTriangulation,
-    Tissue,
-    initiate_triangulation,
-)
+from tissue_lite.tissue import CellState, Tissue, compute_cell_centroids
 from tissue_lite.triangles import TriangleMesh, build_triangle_mesh
-
-logger = logging.getLogger(__name__)
 
 type TomlValue = (
     bool | int | float | str | None | tuple[TomlValue, ...] | dict[str, TomlValue]
@@ -130,20 +122,22 @@ def _toml_value(value: TomlValue) -> str:
 class ModelState:
     """A model bound to a tissue, with the hidden state Tissue's reactions carry.
 
-    The tissue is modified in place. `fixed` marks the vertex components the
-    boundary holds still.
+    `positions` holds the integrated variables, the vertices followed by the cell
+    centres; `tissue.vertices` is a view of its first rows. The tissue is modified
+    in place. `fixed` marks the vertex components the boundary holds still.
     """
 
     model: MeristemModel
     tissue: Tissue
     rand_state: IntArray = field(default_factory=make_rand_state)
     pressure_factor: float = 0.0
-    rest_positions: FloatArray = field(init=False)
+    positions: FloatArray = field(init=False, repr=False)
+    rest_positions: FloatArray = field(init=False, repr=False)
     mesh: TriangleMesh = field(init=False, repr=False)
     fixed: BoolArray = field(init=False, repr=False)
     _material: Material = field(init=False, repr=False)
-    _fibres: FibreKernel | None = field(init=False, repr=False)
-    _microtubules: MicrotubuleKernel | None = field(init=False, repr=False)
+    _fibres: FibreParameters | None = field(init=False, repr=False)
+    _microtubules: MicrotubuleParameters | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Initiates the reactions in Tissue's model-file order."""
@@ -151,11 +145,13 @@ class ModelState:
         membrane = model.membrane
         if model.fibres is not None:
             feedback.initiate_fibres(model.fibres, membrane, tissue.cells)
-        tissue.triangulation = initiate_triangulation(tissue)
+        centres = compute_cell_centroids(tissue)
+        self.mesh = build_triangle_mesh(tissue, centres)
         if model.microtubules is not None:
             feedback.initiate_microtubules(tissue.cells)
+        self.positions = np.concatenate([tissue.vertices, centres])
+        tissue.vertices = self.positions[: tissue.topology.num_vertices]
         self.rest_positions = tissue.vertices.copy()
-        self.mesh = build_triangle_mesh(tissue)
         self.fixed = np.zeros(tissue.vertices.shape, dtype=bool)
         edge = np.flatnonzero(tissue.topology.boundary)
         axes = np.array(model.boundary.fixed_axes, dtype=np.int64)
@@ -169,25 +165,28 @@ class ModelState:
         )
 
     @property
-    def triangulation(self) -> CentreTriangulation:
-        """The tissue's centre triangulation (always set after initiation)."""
-        if self.tissue.triangulation is None:
-            raise ValueError("Tissue has no centre triangulation")
-        return self.tissue.triangulation
+    def centres(self) -> FloatArray:
+        """The cell centres, (C, 3), a view of `positions`."""
+        return self.positions[self.tissue.topology.num_vertices :]
 
-    def compute_forces(
-        self,
-        cells: CellState,
-        centres: FloatArray,
-        vertices: FloatArray,
-    ) -> tuple[FloatArray, FloatArray]:
-        """Returns the (vertex, centre) forces, which are the position derivatives.
+    def compute_forces(self) -> FloatArray:
+        """`compute_forces_at` on the current state."""
+        return self.compute_forces_at(self.tissue.cells, self.positions)
 
-        Writes the diagnostics (angles, volume change, velocity) into `cells` and
-        zeroes the fixed boundary components.
+    def compute_forces_at(self, cells: CellState, positions: FloatArray) -> FloatArray:
+        """Returns the derivative of `positions` (vertices, then centres).
+
+        Writes the diagnostics (angles, volume change, velocity) and, without
+        softening, the transverse moduli into `cells`; zeroes the fixed boundary
+        components.
         """
-        vertex_forces = np.zeros_like(vertices)
-        centre_forces = np.zeros_like(centres)
+        num_vertices = self.tissue.topology.num_vertices
+        vertices, centres = positions[:num_vertices], positions[num_vertices:]
+        derivatives = np.zeros_like(positions)
+        vertex_forces, centre_forces = (
+            derivatives[:num_vertices],
+            derivatives[num_vertices:],
+        )
         forces.compute_trbs_forces(
             self.mesh,
             centres,
@@ -212,19 +211,20 @@ class ModelState:
         )
         vertex_forces[self.fixed] = 0.0
         if self.model.track_velocity:
-            diagnostics.update_cell_velocity(cells, self.mesh, vertex_forces)
-        return vertex_forces, centre_forces
+            diagnostics.update_cell_velocity(
+                cells.velocity, self.mesh.offsets, self.mesh.vertex_a, vertex_forces
+            )
+        return derivatives
 
     def update(self, h: float) -> None:
         """Applies the per-step updates of length h in Tissue's order."""
         model, tissue = self.model, self.tissue
         cells = tissue.cells
-        centres = self.triangulation.centres
         if self._fibres is not None:
             feedback.update_fibres(cells, h, self._fibres)
         stress.update_cell_stress(
             self.mesh,
-            centres,
+            self.centres,
             tissue.vertices,
             cells,
             self._material,
@@ -239,7 +239,7 @@ class ModelState:
         if model.growth is not None:
             growth.update_growth(
                 self.mesh,
-                centres,
+                self.centres,
                 tissue.vertices,
                 cells,
                 h,

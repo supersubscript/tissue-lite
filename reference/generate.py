@@ -199,7 +199,7 @@ def make_input_tissue(case: Case) -> Tissue:
     if case.concentration:
         values[:, CONCENTRATION_INDEX] = np.linspace(0.0, 1.0, len(values))
     tissue.cells = RAW_LAYOUT.from_cell_variables(values)
-    return tissue.without_triangulation()
+    return tissue
 
 
 def run_case(case: Case, simulator: Path, models: Path) -> None:

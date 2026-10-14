@@ -2,9 +2,7 @@
 
 Ports the parameters of `VertexFromTRBScenterTriangulationMT` (plane stress, MF 1
 and 10), `Pressure3D::CenterTriangulation::Linear` (area flag 1) and
-`VertexNoUpdateBoundary` from Tissue e74e457. The kernels keep Tissue's
-evaluation order so that results are bit-identical; do not simplify them
-algebraically.
+`VertexNoUpdateBoundary` from Tissue e74e457.
 """
 
 from dataclasses import dataclass
@@ -15,11 +13,10 @@ import numpy as np
 
 from tissue_lite.arrays import IntArray
 from tissue_lite.rand import glibc_rand
-from tissue_lite.tissue import CellState
-from tissue_lite.triangles import Matrix2, Vector, dot
+from tissue_lite.triangles import Matrix2, Vector, multiply, outer, pull_back_direction
 
 _PI = 3.14159265
-RANDOM_THRESHOLD = 0.0001
+_RANDOM_THRESHOLD = 0.0001
 
 
 @dataclass(frozen=True)
@@ -107,12 +104,14 @@ class Boundary:
 
 
 @numba.njit(cache=True)
-def compute_moduli(cells: CellState, c: int, material: Material) -> tuple[float, float]:
-    """Returns (young_L, young_T) of cell c, softened when the material says so."""
-    young_l = cells.young_longitudinal[c]
+def compute_moduli(
+    young_longitudinal: float, concentration: float, material: Material
+) -> tuple[float, float]:
+    """Returns (young_L, young_T) of a cell, softened when the material says so."""
+    young_l = young_longitudinal
     young_t = 2 * material.young_matrix + material.young_fibre - young_l
     if material.soften:
-        a = cells.concentration[c]
+        a = concentration
         k = material.k_hill
         n = material.n_hill
         frac = 1 - a**n / (k**n + a**n)
@@ -144,24 +143,10 @@ def compute_lame_parameters(young_l: float, young_t: float, material: Material) 
 
 
 @numba.njit(cache=True)
-def random_direction(rand_state: IntArray) -> tuple[float, float]:
+def _sample_random_direction(rand_state: IntArray) -> tuple[float, float]:
     """Tissue's fallback when the projected microtubule direction vanishes."""
     angle = ((glibc_rand(rand_state) % 360) * 2 * _PI) / 360
     return np.cos(angle), np.sin(angle)
-
-
-@numba.njit(cache=True)
-def pull_back_direction(
-    gradient: Matrix2, x_axis: Vector, y_axis: Vector, direction: Vector
-) -> tuple[float, float]:
-    """Projects a direction onto the triangle plane and maps it to the rest plane
-    with adj(F): F⁻¹ without the 1/det F (Tissue, KNOWN_ISSUES T2). Unnormalised."""
-    local_x = dot(x_axis, direction)
-    local_y = dot(y_axis, direction)
-    return (
-        gradient[1][1] * local_x - gradient[0][1] * local_y,
-        -gradient[1][0] * local_x + gradient[0][0] * local_y,
-    )
 
 
 @numba.njit(cache=True)
@@ -172,23 +157,15 @@ def compute_fibre_direction(
     microtubule: Vector,
     rand_state: IntArray,
 ) -> tuple[float, float]:
-    """Unit microtubule axis in the rest plane; a random one below
-    `RANDOM_THRESHOLD`, consuming `rand_state` (KNOWN_ISSUES T1)."""
+    """Unit microtubule axis in the rest plane; random when it vanishes (T1).
+
+    The random fallback consumes `rand_state` (KNOWN_ISSUES T1, T2).
+    """
     a0, a1 = pull_back_direction(gradient, x_axis, y_axis, microtubule)
     measure = np.sqrt(a0 * a0 + a1 * a1)
-    if measure < RANDOM_THRESHOLD:
-        return random_direction(rand_state)
+    if measure < _RANDOM_THRESHOLD:
+        return _sample_random_direction(rand_state)
     return a0 / measure, a1 / measure
-
-
-@numba.njit(cache=True)
-def compute_green_strain(gradient: Matrix2) -> Matrix2:
-    """Returns E = (FᵀF - I) / 2 in Tissue's expression order."""
-    (f00, f01), (f10, f11) = gradient
-    return (
-        (0.5 * (f00 * f00 + f10 * f10 - 1), 0.5 * (f00 * f01 + f10 * f11)),
-        (0.5 * (f01 * f00 + f11 * f10), 0.5 * (f01 * f01 + f11 * f11 - 1)),
-    )
 
 
 @numba.njit(cache=True)
@@ -206,32 +183,27 @@ def compute_anisotropic_stress(
     delta_lambda: float,
     delta_mu: float,
 ) -> Matrix2:
-    """Fibre part of the second Piola-Kirchhoff stress, with Δλ = λ_L - λ_T and
-    Δμ = μ_L - μ_T: (Δλ/2) (tr E · aaᵀ + aᵀEa · I) + Δμ (E aaᵀ + aaᵀ E)."""
-    (e00, e01), (e10, e11) = strain
-    a0, a1 = fibre
-    aa00 = a0 * a0
-    aa01 = a0 * a1
-    aa10 = a1 * a0
-    aa11 = a1 * a1
+    """Fibre part of the second Piola-Kirchhoff stress.
+
+    (Δλ/2) (tr E · aaᵀ + aᵀEa · I) + Δμ (E aaᵀ + aaᵀ E), with Δλ = λ_L - λ_T and
+    Δμ = μ_L - μ_T.
+    """
+    (e00, _), (_, e11) = strain
+    aa = outer(fibre)
+    (eaa00, eaa01), (eaa10, eaa11) = multiply(strain, aa)
+    (aae00, aae01), (aae10, aae11) = multiply(aa, strain)
     trace = e00 + e11
     fibre_strain = compute_fibre_strain(strain, fibre)
-    eaa00 = e00 * aa00 + e01 * aa10
-    eaa01 = e00 * aa01 + e01 * aa11
-    eaa10 = e10 * aa00 + e11 * aa10
-    eaa11 = e10 * aa01 + e11 * aa11
-    aae00 = aa00 * e00 + aa01 * e10
-    aae01 = aa00 * e01 + aa01 * e11
-    aae10 = aa10 * e00 + aa11 * e10
-    aae11 = aa10 * e01 + aa11 * e11
     half_lambda = delta_lambda / 2
     return (
         (
-            half_lambda * (trace * aa00 + fibre_strain) + delta_mu * (eaa00 + aae00),
-            half_lambda * (trace * aa01) + delta_mu * (eaa01 + aae01),
+            half_lambda * (trace * aa[0][0] + fibre_strain)
+            + delta_mu * (eaa00 + aae00),
+            half_lambda * (trace * aa[0][1]) + delta_mu * (eaa01 + aae01),
         ),
         (
-            half_lambda * (trace * aa10) + delta_mu * (eaa10 + aae10),
-            half_lambda * (trace * aa11 + fibre_strain) + delta_mu * (eaa11 + aae11),
+            half_lambda * (trace * aa[1][0]) + delta_mu * (eaa10 + aae10),
+            half_lambda * (trace * aa[1][1] + fibre_strain)
+            + delta_mu * (eaa11 + aae11),
         ),
     )

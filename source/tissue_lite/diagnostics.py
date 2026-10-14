@@ -6,27 +6,29 @@ evaluation, so they describe the state at the start of each step.
 """
 
 import numba
-import numpy as np
 
-from tissue_lite.arrays import FloatArray
+from tissue_lite.arrays import FloatArray, IntArray
 from tissue_lite.tissue import CellState
-from tissue_lite.triangles import TriangleMesh
+from tissue_lite.triangles import dot, norm, subtract
 
 
 @numba.njit(cache=True)
-def _angle_diagnostic(first: FloatArray, second: FloatArray, store: FloatArray) -> None:
+def _write_angle_cosines(
+    first: FloatArray, second: FloatArray, store: FloatArray
+) -> None:
     """Stores |cos| of the angle between the axes, normalising both in place."""
     for c in range(first.shape[0]):
         for axis in (first, second):
-            x, y, z = axis[c, 0], axis[c, 1], axis[c, 2]
-            norm = np.sqrt(x * x + y * y + z * z)
-            if norm > 0:
+            length = norm((axis[c, 0], axis[c, 1], axis[c, 2]))
+            if length > 0:
                 for d in range(3):
-                    axis[c, d] = axis[c, d] / norm
-        dot = 0.0
-        for d in range(3):
-            dot += first[c, d] * second[c, d]
-        store[c] = abs(dot)
+                    axis[c, d] = axis[c, d] / length
+        store[c] = abs(
+            dot(
+                (first[c, 0], first[c, 1], first[c, 2]),
+                (second[c, 0], second[c, 1], second[c, 2]),
+            )
+        )
 
 
 def update_angle_diagnostics(cells: CellState) -> None:
@@ -35,8 +37,10 @@ def update_angle_diagnostics(cells: CellState) -> None:
     Normalises the microtubule, stress and strain axes as a side effect (the stress
     axis twice, which can change its last bit).
     """
-    _angle_diagnostic(cells.microtubule, cells.stress_direction, cells.angle_mt_stress)
-    _angle_diagnostic(
+    _write_angle_cosines(
+        cells.microtubule, cells.stress_direction, cells.angle_mt_stress
+    )
+    _write_angle_cosines(
         cells.stress_direction, cells.strain_direction, cells.angle_stress_strain
     )
 
@@ -52,12 +56,10 @@ def update_volume_change(
     change = 0.0
     total = 0.0
     for v in range(vertices.shape[0]):
-        dx = vertices[v, 0] - rest_positions[v, 0]
-        dy = vertices[v, 1] - rest_positions[v, 1]
-        dz = vertices[v, 2] - rest_positions[v, 2]
-        change += np.sqrt(dx * dx + dy * dy + dz * dz)
-        f = vertex_forces[v]
-        total += np.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
+        vertex = (vertices[v, 0], vertices[v, 1], vertices[v, 2])
+        rest = (rest_positions[v, 0], rest_positions[v, 1], rest_positions[v, 2])
+        change += norm(subtract(vertex, rest))
+        total += norm((vertex_forces[v, 0], vertex_forces[v, 1], vertex_forces[v, 2]))
     volume_change[1] = change - volume_change[0]
     volume_change[0] = change
     volume_change[2] = total
@@ -65,14 +67,17 @@ def update_volume_change(
 
 @numba.njit(cache=True)
 def update_cell_velocity(
-    cells: CellState, mesh: TriangleMesh, vertex_forces: FloatArray
+    velocity: FloatArray,
+    offsets: IntArray,
+    cell_vertices: IntArray,
+    vertex_forces: FloatArray,
 ) -> None:
     """Stores each cell's mean vertex speed (the forces are the velocities)."""
-    offsets = mesh.offsets
-    cell_vertices = mesh.v2
     for c in range(len(offsets) - 1):
         total = 0.0
         for k in range(offsets[c], offsets[c + 1]):
-            f = vertex_forces[cell_vertices[k]]
-            total += np.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2])
-        cells.velocity[c] = total / (offsets[c + 1] - offsets[c])
+            v = cell_vertices[k]
+            total += norm(
+                (vertex_forces[v, 0], vertex_forces[v, 1], vertex_forces[v, 2])
+            )
+        velocity[c] = total / (offsets[c + 1] - offsets[c])

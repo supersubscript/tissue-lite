@@ -48,10 +48,16 @@ Use descriptive function prefixes that communicate the operation being performed
 - `write_` — write text data to a destination.
 - `save_` — persist an object or result.
 
+### State mutation
+
+- `update_` — advance or rewrite state in place (kernels writing into `CellState`, `Tissue` or a `TriangleMesh`), as Tissue's `update` does.
+
 ### Validation and predicates
 
 - `validate_` — validate an object against rules or constraints.
 - `is_` / `has_` / `can_` — boolean predicates; should generally return `bool`.
+
+The 3-vector and 2×2 helpers in `tissue_lite.triangles` (`dot`, `norm`, `cross`, `subtract`, `divide`, `combine`, `multiply`, `transpose`, `outer`) carry the operation's own name, as in formulas.
 
 ## Variable naming conventions
 

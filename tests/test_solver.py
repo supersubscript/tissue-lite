@@ -69,8 +69,7 @@ def test_input_is_not_modified() -> None:
     before = tissue.copy()
     simulate(read_case_model(case).model, tissue, t_end=0.05, n_frames=2)
     np.testing.assert_array_equal(tissue.vertices, before.vertices)
-    for field, original in zip(tissue.cells, before.cells, strict=True):
-        np.testing.assert_array_equal(field, original)
+    np.testing.assert_equal(tuple(tissue.cells), tuple(before.cells))
 
 
 @pytest.mark.parametrize(

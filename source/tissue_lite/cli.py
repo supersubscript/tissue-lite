@@ -15,6 +15,7 @@ from tissue_lite.legacy.model_file import read_model_file
 from tissue_lite.legacy.slots import SlotLayout
 from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.model import MeristemModel
+from tissue_lite.output import VtuWriter
 from tissue_lite.solvers.simulate import simulate
 
 logger = logging.getLogger(__name__)
@@ -86,8 +87,7 @@ def main(
         n_frames=settings.n_frames,
         solver=settings.solver,
         t_start=settings.t_start,
-        output_dir=vtk_output,
-        slot_layout=layout,
+        writer=VtuWriter(vtk_output, settings.n_frames, layout),
     )
     if init_output is not None:
         write_init(result.final, init_output, layout)

@@ -7,7 +7,7 @@ from tissue_lite.feedback import (
     Coupling,
     FibreStiffness,
     MicrotubuleAlignment,
-    MicrotubuleKernel,
+    MicrotubuleParameters,
     initiate_fibres,
     initiate_microtubules,
     update_fibres,
@@ -69,7 +69,7 @@ def test_microtubules_rotate_towards_stress_and_stay_unit() -> None:
     cells = CellState.zeros(1)
     cells.stress_direction[0] = (0.0, 1.0, 0.0)
     cells.microtubule[0] = (-1.0, 0.0, 0.0)
-    update_microtubules(cells, 0.5, MicrotubuleKernel(1.0, 0, 300.0, 0.0))
+    update_microtubules(cells, 0.5, MicrotubuleParameters(1.0, 0, 300.0, 0.0))
     mt = cells.microtubule[0]
     np.testing.assert_allclose(np.linalg.norm(mt), 1.0)
     assert mt[1] > 0 and mt[0] < 0
@@ -90,21 +90,21 @@ def test_stress_threshold_needs_velocity_threshold() -> None:
 @pytest.mark.parametrize(
     ("alignment", "expected"),
     [
-        (MicrotubuleAlignment(rate=1.0), MicrotubuleKernel(1.0, 2, 300.0, 0.0)),
+        (MicrotubuleAlignment(rate=1.0), MicrotubuleParameters(1.0, 2, 300.0, 0.0)),
         (
             MicrotubuleAlignment(rate=1.0, stress_difference_threshold=None),
-            MicrotubuleKernel(1.0, 1, 300.0, 0.0),
+            MicrotubuleParameters(1.0, 1, 300.0, 0.0),
         ),
         (
             MicrotubuleAlignment(
                 rate=1.0, velocity_threshold=None, stress_difference_threshold=None
             ),
-            MicrotubuleKernel(1.0, 0, 0.0, 0.0),
+            MicrotubuleParameters(1.0, 0, 0.0, 0.0),
         ),
     ],
 )
 def test_microtubule_gate_levels(
-    alignment: MicrotubuleAlignment, expected: MicrotubuleKernel
+    alignment: MicrotubuleAlignment, expected: MicrotubuleParameters
 ) -> None:
     assert alignment.to_kernel() == expected
 

@@ -13,6 +13,7 @@ from tissue_lite.legacy.model_file import LegacyModel, read_model_file
 from tissue_lite.legacy.slots import SlotLayout
 from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.model import ModelState
+from tissue_lite.output import VtuWriter
 from tissue_lite.solvers.simulate import SimulationResult, simulate
 from tissue_lite.tissue import Tissue
 
@@ -47,22 +48,6 @@ def read_case_tissue(case: Path, name: str = "input.init") -> Tissue:
     return read_init(case / name, read_case_model(case).layout)
 
 
-def simulate_case(case: Path, output_dir: Path | None = None) -> SimulationResult:
-    """Runs a reference case with its own model, input and solver settings."""
-    legacy = read_case_model(case)
-    settings = read_solver_file(case / "solver.rk5")
-    return simulate(
-        legacy.model,
-        read_case_tissue(case),
-        t_end=settings.t_end,
-        n_frames=settings.n_frames,
-        solver=settings.solver,
-        t_start=settings.t_start,
-        output_dir=output_dir,
-        slot_layout=legacy.layout,
-    )
-
-
 def case_state(case: Path) -> ModelState:
     """Returns the initiated model state of a reference case."""
     return ModelState(model=read_case_model(case).model, tissue=read_case_tissue(case))
@@ -78,8 +63,19 @@ def run_case(tmp_path_factory: pytest.TempPathFactory) -> CaseRunner:
 
     def run(case: Path) -> tuple[SimulationResult, Path]:
         if case not in runs:
+            legacy = read_case_model(case)
+            settings = read_solver_file(case / "solver.rk5")
             vtk = tmp_path_factory.mktemp(case.name)
-            runs[case] = (simulate_case(case, vtk), vtk)
+            result = simulate(
+                legacy.model,
+                read_case_tissue(case),
+                t_end=settings.t_end,
+                n_frames=settings.n_frames,
+                solver=settings.solver,
+                t_start=settings.t_start,
+                writer=VtuWriter(vtk, settings.n_frames, legacy.layout),
+            )
+            runs[case] = (result, vtk)
         return runs[case]
 
     return run

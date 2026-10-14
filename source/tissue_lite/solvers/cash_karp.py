@@ -51,7 +51,12 @@ class CashKarp:
         if self.max_step <= 0 or self.tolerance <= 0:
             raise ValueError("max_step and tolerance must be positive")
 
+    @property
+    def time_slack(self) -> float:
+        return 1e-9 * self.tolerance
+
     def start(self, state: ModelState) -> CashKarpRun:
+        """Binds the settings to a model state; the run keeps h between steps."""
         return CashKarpRun(self, state)
 
 
@@ -62,112 +67,65 @@ class CashKarpRun:
         self.state = state
         self.max_step = config.max_step
         self.tolerance = config.tolerance
-        self.time_slack = 1e-9 * config.tolerance
         self.h = config.max_step
 
-    def step(
-        self,
-        t: float,
-        t_bound: float,
-        vertex_forces: FloatArray,
-        centre_forces: FloatArray,
-    ) -> StepResult:
+    def step(self, t: float, t_bound: float, derivatives: FloatArray) -> StepResult:
         """Takes one accepted step; `update` gets the trial step, as in Tissue."""
         state = self.state
-        tissue = state.tissue
-        centres = state.triangulation.centres
         h = self.h
-        scale_v = np.abs(tissue.vertices) + np.abs(vertex_forces * h) + self.time_slack
-        scale_c = np.abs(centres) + np.abs(centre_forces * h) + self.time_slack
+        scale = (
+            np.abs(state.positions) + np.abs(derivatives * h) + 1e-9 * self.tolerance
+        )
         if t + h > t_bound:
             h = t_bound - t
-        h_did, h_next = _retry_step(
-            state, t, h, vertex_forces, centre_forces, scale_v, scale_c, self.tolerance
-        )
+        h_did, h_next = self._find_accepted_step(t, h, derivatives, scale)
         state.update(h)
         self.h = min(h_next, self.max_step)
         return StepResult(t=t + h_did, accepted=h_did == h)
 
-
-def _retry_step(
-    state: ModelState,
-    t: float,
-    h_try: float,
-    vertex_forces: FloatArray,
-    centre_forces: FloatArray,
-    scale_v: FloatArray,
-    scale_c: FloatArray,
-    tolerance: float,
-) -> tuple[float, float]:
-    """Port of `rkqs`: shrinks the step until the scaled error is within tolerance,
-    then writes the new positions and returns (step taken, next step)."""
-    h = h_try
-    tissue = state.tissue
-    triangulation = state.triangulation
-    while True:
-        x_out, c_out, x_err, c_err = _cash_karp_step(
-            state,
-            tissue.vertices,
-            triangulation.centres,
-            vertex_forces,
-            centre_forces,
-            h,
+    def _find_accepted_step(
+        self, t: float, h_try: float, derivatives: FloatArray, scale: FloatArray
+    ) -> tuple[float, float]:
+        """Port of `rkqs`: shrinks h until the scaled error passes, writes the new
+        positions and returns (step taken, next step)."""
+        state = self.state
+        h = h_try
+        while True:
+            positions, error = _compute_cash_karp_step(state, derivatives, h)
+            err_max = max(float(np.max(np.abs(error / scale))), 0.0) / self.tolerance
+            if err_max <= 1.0:
+                break
+            h_temp = _SAFETY * h * math.pow(err_max, _PSHRINK)
+            h = h_temp if h_temp > 0.1 * h else 0.1 * h  # h > 0 (simulate checks)
+            if t + h == t:
+                raise RuntimeError("Step size underflow")
+        h_next = (
+            _SAFETY * h * math.pow(err_max, _PGROW) if err_max > _ERRCON else 5.0 * h
         )
-        err_max = max(
-            float(np.max(np.abs(c_err / scale_c))),
-            float(np.max(np.abs(x_err / scale_v))),
-            0.0,
-        )
-        err_max /= tolerance
-        if err_max <= 1.0:
-            break
-        h_temp = _SAFETY * h * math.pow(err_max, _PSHRINK)
-        h = h_temp if h_temp > 0.1 * h else 0.1 * h  # h > 0 (simulate checks)
-        if t + h == t:
-            raise RuntimeError("Step size underflow")
-    h_next = _SAFETY * h * math.pow(err_max, _PGROW) if err_max > _ERRCON else 5.0 * h
-    tissue.vertices[:] = x_out
-    triangulation.centres[:] = c_out
-    return h, h_next
+        state.positions[:] = positions
+        return h, h_next
 
 
-def _cash_karp_step(
-    state: ModelState,
-    x: FloatArray,
-    c: FloatArray,
-    k1x: FloatArray,
-    k1c: FloatArray,
-    h: float,
-) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-    """Port of `rkck`: one Cash–Karp step from vertices x and centres c with
-    derivatives k1, returning (x, c, x error, c error).
+def _compute_cash_karp_step(
+    state: ModelState, k1: FloatArray, h: float
+) -> tuple[FloatArray, FloatArray]:
+    """Port of `rkck`: one Cash–Karp step of length h from the state's positions
+    with derivatives k1; returns (new positions, error estimate).
 
     Stage derivatives see a copy of the cell state, so their side effects are
     discarded as in Tissue.
     """
+    y = state.positions
     cells = state.tissue.cells
 
-    def stage(xs: FloatArray, cs: FloatArray) -> tuple[FloatArray, FloatArray]:
-        return state.compute_forces(cells.copy(), cs, xs)
+    def stage(trial: FloatArray) -> FloatArray:
+        return state.compute_forces_at(cells.copy(), trial)
 
-    k2x, k2c = stage(x + _B21 * h * k1x, c + _B21 * h * k1c)
-    k3x, k3c = stage(
-        x + h * (_B31 * k1x + _B32 * k2x), c + h * (_B31 * k1c + _B32 * k2c)
-    )
-    k4x, k4c = stage(
-        x + h * (_B41 * k1x + _B42 * k2x + _B43 * k3x),
-        c + h * (_B41 * k1c + _B42 * k2c + _B43 * k3c),
-    )
-    k5x, k5c = stage(
-        x + h * (_B51 * k1x + _B52 * k2x + _B53 * k3x + _B54 * k4x),
-        c + h * (_B51 * k1c + _B52 * k2c + _B53 * k3c + _B54 * k4c),
-    )
-    k6x, k6c = stage(
-        x + h * (_B61 * k1x + _B62 * k2x + _B63 * k3x + _B64 * k4x + _B65 * k5x),
-        c + h * (_B61 * k1c + _B62 * k2c + _B63 * k3c + _B64 * k4c + _B65 * k5c),
-    )
-    x_out = x + h * (_C1 * k1x + _C3 * k3x + _C4 * k4x + _C6 * k6x)
-    c_out = c + h * (_C1 * k1c + _C3 * k3c + _C4 * k4c + _C6 * k6c)
-    x_err = h * (_DC1 * k1x + _DC3 * k3x + _DC4 * k4x + _DC5 * k5x + _DC6 * k6x)
-    c_err = h * (_DC1 * k1c + _DC3 * k3c + _DC4 * k4c + _DC5 * k5c + _DC6 * k6c)
-    return x_out, c_out, x_err, c_err
+    k2 = stage(y + _B21 * h * k1)
+    k3 = stage(y + h * (_B31 * k1 + _B32 * k2))
+    k4 = stage(y + h * (_B41 * k1 + _B42 * k2 + _B43 * k3))
+    k5 = stage(y + h * (_B51 * k1 + _B52 * k2 + _B53 * k3 + _B54 * k4))
+    k6 = stage(y + h * (_B61 * k1 + _B62 * k2 + _B63 * k3 + _B64 * k4 + _B65 * k5))
+    y_out = y + h * (_C1 * k1 + _C3 * k3 + _C4 * k4 + _C6 * k6)
+    error = h * (_DC1 * k1 + _DC3 * k3 + _DC4 * k4 + _DC5 * k5 + _DC6 * k6)
+    return y_out, error

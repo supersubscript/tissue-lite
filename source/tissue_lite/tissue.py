@@ -4,7 +4,6 @@ Tissue keeps all per-cell quantities in one numbered array; here each has its ow
 array in `CellState`. The numbering survives only in `tissue_lite.legacy.slots`.
 """
 
-from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
@@ -12,6 +11,17 @@ import numpy as np
 
 from tissue_lite.arrays import FloatArray
 from tissue_lite.topology import Topology
+
+_FIELD_SHAPES: dict[str, tuple[int, ...]] = {
+    "microtubule": (3,),
+    "stress_direction": (3,),
+    "stress_direction_second": (3,),
+    "strain_direction": (3,),
+    "strain_perpendicular": (3,),
+    "normal": (3,),
+    "stress_tensor": (3, 3),
+    "strain_tensor": (3, 3),
+}
 
 
 class CellState(NamedTuple):
@@ -26,7 +36,8 @@ class CellState(NamedTuple):
     microtubule: FloatArray  # unit axis
     growth_signal: FloatArray  # Tissue's slot 3 ("cell vector length"), read by growth
     young_longitudinal: FloatArray
-    young_transverse: FloatArray
+    young_transverse: FloatArray  # Tissue's slot 20: Y_T after a force evaluation
+    # (unsoftened models), the anisotropic energy after an update (KNOWN_ISSUES T7)
     stress_direction: FloatArray
     stress_max: FloatArray
     stress_direction_second: FloatArray
@@ -73,34 +84,6 @@ class CellState(NamedTuple):
         return CellState(*(a.copy() for a in self))
 
 
-_FIELD_SHAPES: dict[str, tuple[int, ...]] = {
-    "microtubule": (3,),
-    "stress_direction": (3,),
-    "stress_direction_second": (3,),
-    "strain_direction": (3,),
-    "strain_perpendicular": (3,),
-    "normal": (3,),
-    "stress_tensor": (3, 3),
-    "strain_tensor": (3, 3),
-}
-
-
-@dataclass
-class CentreTriangulation:
-    """Tissue's centre triangulation: one centre per cell, spokes to its vertices.
-
-    `spokes[t]` holds the rest lengths of triangle t's two spokes (centre to vertex
-    k, centre to vertex k + 1). Tissue stores one spoke per vertex unless the
-    membrane uses double rest lengths; here every triangle owns both, and without
-    growth the shared values stay equal. `wall_extensions[t]` is each triangle's
-    growth added to its wall's rest length (0 without growth).
-    """
-
-    centres: FloatArray  # (C, 3)
-    spokes: FloatArray  # (T, 2)
-    wall_extensions: FloatArray  # (T,)
-
-
 @dataclass
 class Tissue:
     """A cell tissue: topology plus every state variable the simulation carries."""
@@ -110,7 +93,6 @@ class Tissue:
     wall_lengths: FloatArray  # (W,) rest lengths
     wall_variables: FloatArray  # (W, n), carried through unchanged
     cells: CellState
-    triangulation: CentreTriangulation | None = None
 
     def copy(self) -> Tissue:
         """Returns a deep copy of the state; the topology is shared."""
@@ -120,48 +102,23 @@ class Tissue:
             wall_lengths=self.wall_lengths.copy(),
             wall_variables=self.wall_variables.copy(),
             cells=self.cells.copy(),
-            triangulation=deepcopy(self.triangulation),
         )
 
-    def without_triangulation(self) -> Tissue:
-        """Returns a copy as Tissue re-reads it from an `-init_output` file."""
-        tissue = self.copy()
-        tissue.triangulation = None
-        return tissue
+
+def compute_row_norms(rows: FloatArray) -> FloatArray:
+    """Returns the length of each row of an (N, 3) array, squares summed in order."""
+    return np.sqrt(
+        rows[:, 0] * rows[:, 0] + rows[:, 1] * rows[:, 1] + rows[:, 2] * rows[:, 2]
+    )
 
 
 def compute_cell_centroids(tissue: Tissue) -> FloatArray:
     """Returns Tissue's `positionFromVertex`: wall midpoints weighted by wall length."""
     topo = tissue.topology
     ends = tissue.vertices[topo.wall_vertices[topo.cell_walls]]  # (sum N, 2, 3)
-    diff = ends[:, 0] - ends[:, 1]
-    # Explicit sums and bincount keep Tissue's sequential summation order.
-    length = np.sqrt(
-        diff[:, 0] * diff[:, 0] + diff[:, 1] * diff[:, 1] + diff[:, 2] * diff[:, 2]
-    )
+    length = compute_row_norms(ends[:, 0] - ends[:, 1])
     weighted = 0.5 * (ends[:, 0] + ends[:, 1]) * length[:, None]
     cells, n = topo.triangle_cells, topo.num_cells
-    total = np.bincount(cells, weights=length, minlength=n)
+    total = np.bincount(cells, weights=length, minlength=n)  # sums sequentially
     sums = [np.bincount(cells, weights=weighted[:, d], minlength=n) for d in range(3)]
     return np.column_stack(sums) / total[:, None]
-
-
-def initiate_triangulation(tissue: Tissue) -> CentreTriangulation:
-    """Creates the centre triangulation from scratch, as Tissue does without one stored.
-
-    Centres are the wall-length-weighted means of the wall midpoints; spoke rest
-    lengths are the current centre–vertex distances.
-    """
-    topo = tissue.topology
-    centres = compute_cell_centroids(tissue)
-    spoke = centres[topo.triangle_cells] - tissue.vertices[topo.cell_vertices]
-    distances = np.sqrt(
-        spoke[:, 0] * spoke[:, 0]
-        + spoke[:, 1] * spoke[:, 1]
-        + spoke[:, 2] * spoke[:, 2]
-    )
-    return CentreTriangulation(
-        centres=centres,
-        spokes=np.column_stack([distances, distances[topo.triangle_next]]),
-        wall_extensions=np.zeros(len(distances)),
-    )

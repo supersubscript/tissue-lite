@@ -1,1 +1,1 @@
-"""Time steppers: Tissue's Cash–Karp, quasi-static Newton and scipy's stiff solvers."""
+"""Time steppers: the `Stepper` protocol, Tissue's Cash–Karp and the frame loop."""
