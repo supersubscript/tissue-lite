@@ -68,6 +68,7 @@ def compute_forces(
     material: Material,
     rand_state: IntArray,
     pressure: float,
+    share_divisor: float,
     vertex_forces: FloatArray,
     centre_forces: FloatArray,
 ) -> None:
@@ -81,6 +82,7 @@ def compute_forces(
         material: Membrane scalars.
         rand_state: glibc `rand` state, advanced by each random fibre draw.
         pressure: Current, ramped turgor pressure.
+        share_divisor: 2.0 for Tissue's pressure share, 3.0 for the consistent one.
         vertex_forces: (V, 3), accumulated into, not zeroed.
         centre_forces: (C, 3), accumulated into, not zeroed.
 
@@ -90,8 +92,9 @@ def compute_forces(
     into `cells.young_transverse` (Tissue's slot 20, T7); with softening it is left
     alone (C3). A triangle with a rest angle whose cosine is within 1e-4 of 1 gets
     Tissue's sliver "fix" in place of its own forces (T3). `pressure` is the current,
-    ramped value, applied as `pressure * area / 2` along each triangle's normal to all
-    three nodes; the consistent share would be area / 3 (P1).
+    ramped value, applied as `pressure * area / share_divisor` along each triangle's
+    normal to all three nodes: Tissue divides by 2, the consistent share by 3 (P1).
+    `material.fidelity` False drops the quirks (T1, T2, T3, T7, C3; see `TRBSMembrane`).
 
     The triangles are evaluated in parallel (Numba's thread count), then added up
     in Tissue's order with the random draws and slivers handled there, so the result
@@ -111,6 +114,7 @@ def compute_forces(
         cells,
         material,
         pressure,
+        share_divisor,
         node_forces,
         pressure_forces,
         kinds,
@@ -156,6 +160,7 @@ def _compute_triangle_forces(
     cells: CellState,
     material: Material,
     pressure: float,
+    share_divisor: float,
     node_forces: FloatArray,
     pressure_forces: FloatArray,
     kinds: Int8Array,
@@ -178,7 +183,7 @@ def _compute_triangle_forces(
         young_l, young_t = compute_moduli(
             cells.young_longitudinal[c], cells.concentration[c], material
         )
-        if not material.soften:
+        if not material.soften or not material.fidelity:
             young_transverse[c] = young_t
         lame = compute_lame_parameters(young_l, young_t, material)
         microtubule = (
@@ -193,12 +198,16 @@ def _compute_triangle_forces(
                 triangle.lengths, rest_lengths
             )
             found, f0, f1 = find_fibre_direction(
-                gradient, triangle.x_axis, triangle.y_axis, microtubule
+                gradient,
+                triangle.x_axis,
+                triangle.y_axis,
+                microtubule,
+                material.fidelity,
             )
             cosines = _compute_rest_cosines(rest_lengths)
             if not found:
                 kinds[t] = _RANDOM_FIBRE
-            elif _is_sliver(cosines):
+            elif material.fidelity and _is_sliver(cosines):
                 kinds[t] = _SLIVER_TRIANGLE
             else:
                 kinds[t] = _NORMAL
@@ -213,7 +222,7 @@ def _compute_triangle_forces(
                     (f0, f1),
                     node_forces[t],
                 )
-            coeff = pressure * (compute_triangle_area(triangle.lengths) / 2)
+            coeff = pressure * (compute_triangle_area(triangle.lengths) / share_divisor)
             for d in range(3):
                 pressure_forces[t, d] = coeff * triangle.normal[d]
 
@@ -249,7 +258,7 @@ def _compute_random_fibre_triangle(
         cells.microtubule[c, 2],
     )
     fibre = compute_fibre_direction(
-        gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state
+        gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state, True
     )
     cosines = _compute_rest_cosines(rest_lengths)
     if _is_sliver(cosines):
