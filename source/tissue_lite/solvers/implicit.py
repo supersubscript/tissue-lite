@@ -32,6 +32,10 @@ class Implicit:
             raise ValueError("step, rtol and atol must be positive")
 
     @property
+    def fidelity(self) -> bool:
+        return False
+
+    @property
     def time_slack(self) -> float:
         return 1e-9 * self.step
 

@@ -55,8 +55,8 @@ def test_frames_follow_the_schedule() -> None:
         n_frames=4,
         solver=QuasiStatic(step=1.0),
     )
-    np.testing.assert_allclose(result.times, [0.0, 1.0, 2.0, 3.0, 3.0])
-    assert result.accepted_steps == 4  # three feedback steps and the S6 sliver to t_end
+    np.testing.assert_allclose(result.times, [0.0, 1.0, 2.0, 3.0])
+    assert result.accepted_steps == 3  # no S6 sliver step to t_end
 
 
 def test_converged_run_stops_iterating() -> None:

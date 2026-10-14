@@ -132,3 +132,32 @@ def test_cash_karp_without_fidelity_keeps_volume_change_per_step() -> None:
     )
     # The extra evaluation at the accepted state must not reset the change to 0.
     assert all(f.tissue.cells.volume_change[1] != 0.0 for f in result.frames[1:])
+
+
+@pytest.mark.parametrize(("fidelity", "num_frames"), [(True, 6), (False, 5)])
+def test_fidelity_decides_frame_schedule(fidelity: bool, num_frames: int) -> None:
+    case = CASES_DIR / "sweep_pre"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=0.04,
+        n_frames=5,
+        solver=CashKarp(fidelity=fidelity),
+    )
+    expected = np.linspace(0.0, 0.04, 5)
+    np.testing.assert_allclose(result.times[:5], expected, atol=1e-8)
+    assert len(result.frames) == num_frames
+
+
+@pytest.mark.parametrize(("tolerance", "stops"), [(1e9, True), (1e-9, False)])
+def test_steady_tolerance_ends_run(tolerance: float, stops: bool) -> None:
+    case = CASES_DIR / "sweep_pre"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=0.04,
+        n_frames=2,
+        solver=CashKarp(),
+        steady_tolerance=tolerance,
+    )
+    assert (result.times[-1] < 0.04) == stops

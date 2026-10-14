@@ -5,7 +5,7 @@ integrated; every other variable is carried through each step unchanged, exactly
 Tissue's `y + h * 0` does (KNOWN_ISSUES S3 is therefore not ported). Kept as in
 Tissue: the step is capped at `max_step` after every step (S1), per-step updates
 receive the trial step rather than the accepted one (S2), and the error scale is
-`|y| + |h dy| + 1e-9 tolerance`. `CashKarp(fidelity=False)` fixes S2 and S5.
+`|y| + |h dy| + 1e-9 tolerance`. `CashKarp(fidelity=False)` fixes S2, S5 and S6.
 """
 
 import math
@@ -49,7 +49,7 @@ class CashKarp:
     (KNOWN_ISSUES S1), so error control can only shrink steps. With `fidelity` False,
     the per-step updates get the accepted step (S2) and the diagnostics they read are
     re-evaluated at the accepted state (S5), at one extra force evaluation per step
-    (which may consume `rand_state`, T1).
+    (which may consume `rand_state`, T1), and `simulate` prints t_end once (S6).
 
     Raises:
         ValueError: If `max_step` or `tolerance` is not positive.

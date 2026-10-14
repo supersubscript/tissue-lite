@@ -36,6 +36,11 @@ class Stepper(Protocol):
     """A solver configuration."""
 
     @property
+    def fidelity(self) -> bool:
+        """Whether runs print t_end twice, as Tissue does (KNOWN_ISSUES S6)."""
+        ...
+
+    @property
     def time_slack(self) -> float:
         """Added to the frame schedule; Tissue's `1e-9 * tolerance`."""
         ...
