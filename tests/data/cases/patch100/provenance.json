@@ -1,0 +1,25 @@
+{
+  "case": "patch100",
+  "description": "100-cell end-to-end run.",
+  "tags": [
+    "slow"
+  ],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/zfix_rerun/mod_120_120_04/model.model",
+  "model_edits": [],
+  "source_init": "patch100",
+  "n_vars": 35,
+  "concentration_ramp_index": null,
+  "sha256": {
+    "model.model": "753bb633a2fc506590a38097d34112db72a533bbf9dcabaa23bfdd476ac2d308",
+    "solver.rk5": "043bc871ea18847cd71fa0a63620f4a9b89f32d928d937eab433d3ce08d4711c",
+    "input.init": "7eeeab769271596e61324be22c70a996f89e83c67a79bd0d15b5aa52f5c4c879",
+    "final.init": "112938dca99504db5f934eaa6ce73cf32d0ac0da93ef01c97f42a617a0c902f9"
+  },
+  "generated": "2026-10-14T16:55:01+00:00"
+}

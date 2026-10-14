@@ -1,0 +1,32 @@
+{
+  "case": "auxin_softening_hill",
+  "description": "MF=10 with K=2, n=2 (p9, p10) and a ramp in variable 41.",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/celly/test_auxin_decay/model.model",
+  "model_edits": [
+    [
+      "0    # MT feedback flag 0 none   1 Teta",
+      "2    # K (Hill)"
+    ],
+    [
+      "0    # unused",
+      "2    # n (Hill)"
+    ]
+  ],
+  "source_init": "patch19",
+  "n_vars": 43,
+  "concentration_ramp_index": 41,
+  "sha256": {
+    "model.model": "eb02df346297b82db9fbc911ca6e057ba9718d0572788abef33f512659783fab",
+    "solver.rk5": "394683a74a019f0d5d2bb6b5b247a927a63d97b4419c51e1d4a3402667f9eff3",
+    "input.init": "3f7e75fb4d7cf52f6a47c886e6b8e015e72073155b0eb479a22d3abbc24ee097",
+    "final.init": "13bd0b9cfc2c31cabf85f41c954bffa2618398cc58adf782a09231fb5af949b3"
+  },
+  "generated": "2026-10-14T16:55:00+00:00"
+}

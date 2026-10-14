@@ -1,0 +1,91 @@
+9 0 1
+
+FiberModel 8 3 1 2 1
+1.0  # k_rate
+300   # threshold
+2    # liniear-hill-flag 0/1
+12  # k_hill
+10    # n_hill
+50.0   # Y_matrix
+1000.0   # Y_fiber
+1 # initiate flag
+
+18   # anisotropy index
+16   # Young_Longitudinal index
+16   # Young_Longitudinal index
+22   # velocity store index(from Up.MT.Equi.)
+
+
+CenterTriangulation::Initiate 0 1 1
+39   #internalVarStartIndex
+
+
+VertexFromTRBScenterTriangulationMT 11 4 11 1 1 1
+50.0 1000.0 0.2 0.2
+1    # MF (0 constant )(1 MF model)
+0.0  # neigbhbor weight	  
+0    # max stress
+1    # plain strain/stress
+0    # teta
+0    # MT feedback flag 0 none   1 Teta
+0    # unused
+
+0    # resting length index
+0    # MT
+17   # strain anisotropy
+18   # stress anisotropy
+19   # area ratio index
+20   # iso energy index
+20   # aniso energy index
+16   # young longitudinal
+21   # MT stress index
+26   # start index for stress tensor
+32   # start index for normal vector
+
+39   # additional wall index
+
+8    # strain
+     # perp-strain
+
+4    # stress
+
+
+Pressure3D::CenterTriangulation::Linear 3 1 1
+0.1  # Pressure
+1    # Area_flag (0) or 1  = (not) prop to Area
+0.01  # (0.0) linear ramp-up of pressure
+39   # CenterTrangulation start index
+
+
+UpdateMTDirectionEquilibrium 3 4 1 1 1 2
+1.0    # k_rate
+300   # equilibrium velocity threshold
+0.0  # stress difference threshold
+
+4     # target index
+0     # MT index
+22    # velocity store index
+7     # max-stress index
+21    # MT-stress index
+
+CalculateAngleVectors 0 2 2 1
+0  # start index vector 1
+4  # start index vector 2
+23 # store index
+
+CalculateAngleVectors 0 2 2 1
+4  # start index vector 1
+8  # start index vector 2
+24 # store index
+
+TemplateVolumeChange 0 1 6
+1 25
+2 25
+3 25
+
+VertexNoUpdateBoundary 0 0
+
+
+StaticDirection 0 0
+ParallellDirection 0 1 1 0
+    

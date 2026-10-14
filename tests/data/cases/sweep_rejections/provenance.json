@@ -1,0 +1,23 @@
+{
+  "case": "sweep_rejections",
+  "description": "Tight tolerance, forcing rejected Cash-Karp steps.",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/zfix_rerun/mod_120_120_04/model.model",
+  "model_edits": [],
+  "source_init": "case:sweep_pre",
+  "n_vars": 35,
+  "concentration_ramp_index": null,
+  "sha256": {
+    "model.model": "753bb633a2fc506590a38097d34112db72a533bbf9dcabaa23bfdd476ac2d308",
+    "solver.rk5": "677a48ab839bf12dd139ef306de5969b01938d6abcfcf39c06cf65cd4521fcc2",
+    "input.init": "2808a74e802ce9776f9fc54c4a7a48046767a0a7c8b06389f7c64bc3efc4708b",
+    "final.init": "9330193c9f359300292c187e65085a22f4efad62f09d5e3f756dd00708083167"
+  },
+  "generated": "2026-10-14T16:54:56+00:00"
+}

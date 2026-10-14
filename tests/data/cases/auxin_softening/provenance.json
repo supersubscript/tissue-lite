@@ -1,0 +1,23 @@
+{
+  "case": "auxin_softening",
+  "description": "MF=10 as used (p9=p10=0, so K=0, n=0: constant factor 1/2).",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/celly/test_auxin_decay/model.model",
+  "model_edits": [],
+  "source_init": "patch19",
+  "n_vars": 43,
+  "concentration_ramp_index": 41,
+  "sha256": {
+    "model.model": "9ca9271d7a30b8bf7a6d3076b50a87c021cd853c35813d1bdefe589ea13e85c4",
+    "solver.rk5": "394683a74a019f0d5d2bb6b5b247a927a63d97b4419c51e1d4a3402667f9eff3",
+    "input.init": "3f7e75fb4d7cf52f6a47c886e6b8e015e72073155b0eb479a22d3abbc24ee097",
+    "final.init": "91dff1c2683a5364097c62fc7876a5e0e226139a7bfae7fca9db3df48f34a81e"
+  },
+  "generated": "2026-10-14T16:55:00+00:00"
+}

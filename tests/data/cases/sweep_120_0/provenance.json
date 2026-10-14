@@ -1,0 +1,23 @@
+{
+  "case": "sweep_120_0",
+  "description": "Sweep main run Ym=120, Yf=0, from the prerun state.",
+  "tags": [],
+  "tissue_commit": "e74e457869410e634a474a68f1071ceb14df753e",
+  "tissue_url": "https://gitlab.com/slcu/teamHJ/tissue",
+  "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "compiler_flags": "-O3 -DNDEBUG -Wall -pedantic -ansi -std=c++11",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "command": "simulator model.model input.init solver.rk5 -init_output final.init",
+  "source_model": "results/zfix_rerun/mod_120_0_04/model.model",
+  "model_edits": [],
+  "source_init": "case:sweep_pre",
+  "n_vars": 35,
+  "concentration_ramp_index": null,
+  "sha256": {
+    "model.model": "f71a818d42c90dc94055c06208c403c322c845bed5359e404e2cdc9dc23f101a",
+    "solver.rk5": "813fe3cb45ef81b5477a10f685fba0fbdfb7f377956ab20ae626732d6748c66d",
+    "input.init": "2808a74e802ce9776f9fc54c4a7a48046767a0a7c8b06389f7c64bc3efc4708b",
+    "final.init": "f158ea2108050b7b4f9df81e79d34ec6f3e822cc2d2beff69baa04ad95c7f2d1"
+  },
+  "generated": "2026-10-14T16:54:56+00:00"
+}
