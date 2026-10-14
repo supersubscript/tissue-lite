@@ -55,7 +55,8 @@ model = MeristemModel(
     microtubules=MicrotubuleAlignment(rate=0.2),
 )
 result = simulate(model, Tissue.read_init(Path("templ.init")), t_end=20.0, n_frames=10)
-mechanics = result.frames[-1].mechanics  # per-cell stress/strain tensors, axes, anisotropies
+# Per-cell stress/strain tensors, principal axes and anisotropies.
+mechanics = result.frames[-1].mechanics
 ```
 
 Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.read_model_file`). Cell variables keep Tissue's slot layout (`layout.py`), so VTU files and readers such as `flower.output` work unchanged.
