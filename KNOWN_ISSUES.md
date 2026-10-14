@@ -1,6 +1,6 @@
 # Known issues
 
-tissue-lite reproduces Tissue e74e457 as-is by default. Status: **Resolved** (tissue-lite's API does not carry the quirk), **Open**, **Kept** (needs a modelling decision), **By design**, **Won't fix**. ✔ marks items exercised by the regression data (fixing one fails the suite); the others come from code reading. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`).
+tissue-lite reproduces Tissue e74e457 as-is by default. Status: **Resolved** (tissue-lite's API does not carry the quirk), **Open**, **Kept** (needs a modelling decision), **Superseded** (a replacement solver avoids it), **By design**, **Won't fix**, **Not an issue**. ✔ marks items exercised by the regression data (fixing one fails the suite); the others come from code reading. Sources are `gitlab.com/slcu/teamHJ/tissue` at e74e457 (`src/…`).
 
 ## Solver (`solvers/cash_karp.py`, Tissue `rungeKutta.cc`)
 
@@ -8,8 +8,8 @@ tissue-lite reproduces Tissue e74e457 as-is by default. Status: **Resolved** (ti
 |---|---|---|---|---|
 | S1 ✔ | Step size is capped at the initial step h1 after every step. | `simulate` loop, `if (h > h1_) h = h1_` | Error control can only shrink steps; t = 600 needs ≥ 120k steps. | Superseded by `QuasiStatic`; lifting the cap would let the explicit feedback (S4) take large steps |
 | S2 ✔ | Per-step updates receive the trial step `h`, not the accepted `hDid`. | `rungeKutta.cc:225` | After a rejection, fibres, MTs, growth and the pressure ramp advance too far. | Open |
-| S3 | Stage 3 writes `ak2W` instead of `ak3W`. | `rungeKutta.cc:486` | Wrong tableau for wall variables; latent, as wall derivatives are always 0. Not ported (walls are not integrated). | Not ported |
-| S4 ✔ | Feedback (fibres, MTs, growth) is explicit Euler outside the error control. | `updateReactions` | First order in time; results depend on the step history. | Superseded by `QuasiStatic` (N1) |
+| S3 | Stage 3 writes `ak2W` instead of `ak3W`. | `rungeKutta.cc:486` | Wrong tableau for wall variables; latent, as wall derivatives are always 0. Not ported (walls are not integrated). | Won't fix: not ported |
+| S4 ✔ | Feedback (fibres, MTs, growth) is explicit Euler outside the error control. | `updateReactions` | First order in time; results depend on the step history. | Kept: every solver feeds back by explicit Euler; `QuasiStatic` only decouples it from the Cash–Karp step history (N1) |
 | S5 ✔ | Stage derivatives see copies of the cell variables, but the top-of-loop call writes the real state. | `derivs` vs `rkck` | Diagnostics (velocity, angles, var 20, var 25) describe the state at the start of the step. The velocity gates in `update` therefore read the velocity of the previous accepted state, one step stale. | Open |
 | S6 ✔ | With more than two frames, t_end is printed twice (just before and after the last step); `tissue.pvd` lists only n frames. | print-time clipping | n + 1 VTU frames for n > 2. | Open |
 | S7 | No convergence criterion. | solver file `t_end` | "Equilibrium" is assumed at a fixed time. | Open |
@@ -23,8 +23,9 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 | T1 | When the MT vector in the rest frame is shorter than 1e-4, a random direction from `rand()` is used, inside `derivs`. | `:4143`, `:5047` | The right-hand side is not a function of the state; breaks RK error control. Reproducible only because glibc `rand()` is seeded with 1 (ported in `rand.py`). | Open |
 | T2 | The 1e-4 threshold is applied to `adj(F)·a`, without 1/det F, and to the unnormalised in-plane MT. | `:4143` | The fallback triggers depending on deformation and on how far the MT points out of plane. | Open |
 | T3 | Sliver-triangle "fix" adds the accumulated centre and vertex derivatives onto all three nodes; only angles near 0° are detected, not near 180°. | `:4507–4535` | Spurious forces on degenerate triangles. Not applied in `update`. | Open |
-| T4 | The stress Jacobi eigen loop applies one extra rotation (pivot recomputed at the loop top) and loses the rotation sign; the strain loop does not. | `:5529` | Eigenvector signs and, rarely, the selected axis differ from `numpy.linalg.eigh`. | Won't fix: eigenvector signs are arbitrary and the MT update re-aligns them |
-| T5 | Principal stress is selected by |value| here but signed in the (dead) neighbour branch. | `:5606` vs `:6365` | Compressive strain can be reported as the maximum. | Kept: needs a modelling decision (signed or \|value\| ranking) |
+| T4 | The stress Jacobi eigen loop applies one extra rotation (pivot recomputed at the loop top) and loses the rotation sign; the strain loop does not. | `:5529` | Eigenvector signs and, rarely, the selected axis differ from `numpy.linalg.eigh`. | Won't fix: signs are arbitrary (the MT update re-aligns them), and another axis is picked only between eigenvalues within 1e-6, where either is principal |
+| T5 | Principal stress is selected by \|value\| here but signed in the (dead) neighbour branch. | `:5606` vs `:6365` | Compressive strain can be reported as the maximum. | Kept: needs a modelling decision (signed or \|value\| ranking) |
+| T6 | Update's isotropic stress uses SVK λT, μT while forces come from biquadratic springs. | `:4275` | — | Not an issue: Delingette's springs are SVK (forces agree to 1e-16), and forces and stress share `compute_anisotropic_stress` |
 | T7 | Var 20 holds Y_T in `derivs` (MF=1 only) and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is Y_T unless the model softens. | index layout | `CellState.young_transverse` mirrors the slot; `energy_isotropic` and `energy_anisotropic` keep the energies. | Open |
 | T8 | Var 19 ("area ratio" in model files) is the total rest area. | `update` | Mislabelled output. | Resolved: `CellState.rest_area` |
 | T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth-layout files; `CellState.normal` keeps them and `SlotLayout(second_axes=True)` reproduces the overwrite on output. | Resolved: `CellState.normal`; the overwrite is kept on output |
@@ -50,10 +51,10 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 
 | # | Issue | Tissue source | Effect | Status |
 |---|---|---|---|---|
-| F1 ✔ | FiberModel flag 2 (`hill_direct`, used by `models/aniso`) sets Y_L = ½(1 + h(a))·Y_f, dropping Y_m and the velocity gate; its initialisation includes Y_m. | `fiberModel.cc:200–205` | With Y_m = 50, Y_f = 1000 the material is never isotropic and the MT direction is the softer one for a < 0.92. | Kept: `coupling="hill"` is the gated form with Y_m |
+| F1 ✔ | FiberModel flag 2 (`hill_direct`, used by `models/aniso`) sets Y_L = ½(1 + h(a))·Y_f, dropping Y_m and the velocity gate; its initialisation includes Y_m. | `fiberModel.cc:200–205` | With Y_m = 50, Y_f = 1000 the material is never isotropic and the MT direction is the softer one for a < 0.92. | Resolved: `coupling="hill"` is the gated form with Y_m; `hill_direct` reproduces Tissue |
 | F2 ✔ | FiberModel has its own Y_m, Y_f, which may differ from the membrane's. | model files | `models/iso-growth` uses (100, 0) in FiberModel and (50, 1000) in TRBS. The legacy reader warns and keeps both. | Resolved: the moduli default to the membrane's |
 | F3 | `models/*` lack `Calculate::VertexVelocity`, so var 22 is never written and every velocity gate (300) is inert. | model files | MT and fibre feedback act during transients. | Resolved: `MeristemModel.track_velocity`, True by default |
-| F4 | FiberModel returns early when its rate is 0, so `initialise` still runs but nothing updates. | `fiberModel.cc` | Expected, but initialisation alone can change Y_L. | Expected |
+| F4 | FiberModel returns early when its rate is 0, so `initialise` still runs but nothing updates. | `fiberModel.cc` | Expected, but initialisation alone can change Y_L. | By design |
 
 ## Growth (`growth.py`, Tissue `growth.cc`, `CenterTriangulation::WallGrowth::StrainTRBS`)
 
