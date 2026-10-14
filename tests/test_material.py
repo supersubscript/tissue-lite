@@ -48,20 +48,26 @@ def test_membrane_flattens_for_kernels(
     assert membrane.to_kernel() == expected
 
 
-@pytest.mark.parametrize(("fidelity", "expected"), [(True, None), (False, (0.0, 0.0))])
+@pytest.mark.parametrize(
+    ("microtubule", "fidelity", "expected"),
+    [
+        ((0.0, 0.0, 1.0), True, None),
+        ((0.0, 0.0, 1.0), False, (0.0, 0.0)),
+        # In plane above 1e-4, but compressed below it by F = I / 2 (T2).
+        ((1.5e-4, 0.0, 1.0), True, None),
+        ((1.5e-4, 0.0, 1.0), False, (1.0, 0.0)),
+    ],
+)
 def test_normal_microtubule_fallback(
-    fidelity: bool, expected: tuple[float, float] | None
+    microtubule: tuple[float, float, float],
+    fidelity: bool,
+    expected: tuple[float, float] | None,
 ) -> None:
     rand_state = make_rand_state()
     before = rand_state.copy()
-    identity = ((1.0, 0.0), (0.0, 1.0))
+    half = ((0.5, 0.0), (0.0, 0.5))
     fibre = compute_fibre_direction(
-        identity,
-        (1.0, 0.0, 0.0),
-        (0.0, 1.0, 0.0),
-        (0.0, 0.0, 1.0),
-        rand_state,
-        fidelity,
+        half, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), microtubule, rand_state, fidelity
     )
     if expected is None:  # Tissue draws a random direction (T1)
         assert np.hypot(*fibre) == pytest.approx(1.0)

@@ -156,3 +156,21 @@ def test_sliver_fix_breaks_force_balance(fidelity: bool, balanced: bool) -> None
     derivatives = state.compute_forces_at(state.tissue.cells, state.positions * 1.05)
     scale = np.abs(derivatives).max()
     assert (np.abs(derivatives.sum(0)).max() < 1e-9 * scale) == balanced
+
+
+def test_membrane_without_fidelity_writes_softened_transverse_modulus() -> None:
+    case = CASES_DIR / "auxin_softening_hill"
+    model = read_model_file(case / "model.model").model
+    membrane = replace(model.membrane, fidelity=False)
+    state = ModelState(
+        model=replace(model, membrane=membrane), tissue=read_case_tissue(case)
+    )
+    state.compute_forces()
+    cells = state.tissue.cells
+    c = cells.concentration
+    softening = 1 - c**2 / (4 + c**2)  # K = n = 2
+    unsoftened = 2 * membrane.young_matrix + membrane.young_fibre
+    np.testing.assert_allclose(
+        cells.young_transverse,
+        softening * (unsoftened - cells.young_longitudinal),
+    )
