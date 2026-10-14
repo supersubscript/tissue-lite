@@ -10,6 +10,7 @@ of every retained model file:
   growth.
 """
 
+import math
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -272,4 +273,7 @@ class ModelState:
                 h,
                 model.growth.rate,
                 model.growth.threshold,
+                math.inf
+                if model.growth.velocity_threshold is None
+                else model.growth.velocity_threshold,
             )

@@ -60,7 +60,7 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 
 | # | Issue | Tissue source | Effect | Status |
 |---|---|---|---|---|
-| G1 ✔ | The equilibrium gate is commented out (`if(true)`); the velocity threshold is unused. | `growth.cc:866–870` | `*-growth` models grow every step, away from equilibrium. | Open |
+| G1 ✔ | The equilibrium gate is commented out (`if(true)`); the velocity threshold is unused. | `growth.cc:866–870` | `*-growth` models grow every step, away from equilibrium. | Fixed by `StrainGrowth(velocity_threshold=…)`, off by default |
 | G2 ✔ | Hard-coded inputs: var 3 as the strain along the growth axis (never written by any retained reaction) and var 7, the maximal **stress**, compared with a strain threshold. | `growth.cc` | Growth is driven by stress against a strain threshold; the var 3 branch depends on the init file. | Kept: needs a modelling decision |
 | G3 ✔ | Growth counts are written to var 30. | `growth.cc` | Hidden slot use. | Resolved: `CellState.growth_count` |
 
