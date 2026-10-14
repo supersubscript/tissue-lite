@@ -100,14 +100,16 @@ def test_cash_karp_fidelity_switch(fidelity: bool) -> None:
 
     def record(h: float) -> None:
         scratch = state.tissue.cells.copy()
+        rand_state = state.rand_state.copy()
         state.compute_forces_at(scratch, state.positions)
+        state.rand_state[:] = rand_state
         fresh.append(
             np.allclose(scratch.velocity, state.tissue.cells.velocity, rtol=1e-12)
         )
         steps.append(h)
         update(h)
 
-    state.update = record  # ty: ignore[invalid-assignment]
+    state.update = record  # ty: ignore[invalid-assignment]  # spy on the method
     solver = CashKarp(settings.solver.max_step, settings.solver.tolerance, fidelity)
     result = integrate(state, settings.t_start, settings.t_end, 0, solver)
     assert result.rejected_steps > 0
@@ -117,3 +119,16 @@ def test_cash_karp_fidelity_switch(fidelity: bool) -> None:
     # S5: the velocity gates read the previous state unless the fix re-evaluates it
     # (re-normalising the microtubule axis can change the last bit).
     assert all(fresh) != fidelity
+
+
+def test_cash_karp_without_fidelity_keeps_volume_change_per_step() -> None:
+    case = CASES_DIR / "sweep_rejections"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=0.03,
+        n_frames=4,
+        solver=CashKarp(fidelity=False),
+    )
+    # The extra evaluation at the accepted state must not reset the change to 0.
+    assert all(f.tissue.cells.volume_change[1] != 0.0 for f in result.frames[1:])

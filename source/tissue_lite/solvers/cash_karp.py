@@ -48,7 +48,8 @@ class CashKarp:
     `max_step` is both the initial step and the cap applied after every step
     (KNOWN_ISSUES S1), so error control can only shrink steps. With `fidelity` False,
     the per-step updates get the accepted step (S2) and the diagnostics they read are
-    re-evaluated at the accepted state (S5), at one extra force evaluation per step.
+    re-evaluated at the accepted state (S5), at one extra force evaluation per step
+    (which may consume `rand_state`, T1).
 
     Raises:
         ValueError: If `max_step` or `tolerance` is not positive.
@@ -103,7 +104,10 @@ class CashKarpRun:
         if self.fidelity:
             state.update(h)
         else:
+            # The volume diagnostic is a change since the last call: keep it per step.
+            volume_change = state.tissue.cells.volume_change.copy()
             state.compute_forces()
+            state.tissue.cells.volume_change[:] = volume_change
             state.update(h_did)
         self.h = min(h_next, self.max_step)
         return StepResult(t=t + h_did, accepted=h_did == h)
