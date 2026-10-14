@@ -48,9 +48,6 @@ class MeristemModel:
     Without `track_velocity` the cell velocity keeps its initial value, as in
     Tissue models lacking `Calculate::VertexVelocity`, so the velocity gates see a
     constant (KNOWN_ISSUES F3).
-
-    Raises:
-        ValueError: If `growth` is set without `membrane.double_rest_lengths`.
     """
 
     membrane: TRBSMembrane
@@ -60,10 +57,6 @@ class MeristemModel:
     microtubules: MicrotubuleAlignment | None = None
     growth: StrainGrowth | None = None
     track_velocity: bool = True
-
-    def __post_init__(self) -> None:
-        if self.growth is not None and not self.membrane.double_rest_lengths:
-            raise ValueError("StrainGrowth needs double_rest_lengths")
 
     @classmethod
     def from_toml(cls, path: Path) -> MeristemModel:

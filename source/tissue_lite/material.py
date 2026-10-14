@@ -52,8 +52,7 @@ class TRBSMembrane:
 
     The longitudinal modulus is read from the cell state (set by `FibreStiffness`);
     the transverse one is `2 young_matrix + young_fibre - longitudinal`.
-    `double_rest_lengths` (Tissue's p10 == 1, KNOWN_ISSUES T11) is required by
-    `StrainGrowth`; every triangle owns both spoke rest lengths regardless.
+    Every triangle owns both spoke rest lengths (Tissue's p10 == 1, KNOWN_ISSUES T11).
 
     Raises:
         ValueError: If a Poisson ratio is outside [0, 0.5).
@@ -63,7 +62,6 @@ class TRBSMembrane:
     young_fibre: float
     poisson_longitudinal: float = 0.2
     poisson_transverse: float = 0.2
-    double_rest_lengths: bool = False
     softening: ConcentrationSoftening | None = None
 
     def __post_init__(self) -> None:

@@ -41,5 +41,5 @@ def test_boundary_rejects_axes() -> None:
 def test_membrane_flattens_for_kernels(
     softening: ConcentrationSoftening | None, expected: Material
 ) -> None:
-    membrane = TRBSMembrane(1.0, 2.0, 0.2, 0.3, True, softening)
+    membrane = TRBSMembrane(1.0, 2.0, 0.2, 0.3, softening)
     assert membrane.to_kernel() == expected

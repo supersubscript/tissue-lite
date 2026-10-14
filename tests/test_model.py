@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 from conftest import CASES_DIR, MESHES_DIR, MODELS, case_state, read_case_tissue
 
-from tissue_lite.growth import StrainGrowth
 from tissue_lite.legacy.init_file import read_init
 from tissue_lite.legacy.model_file import read_model_file
 from tissue_lite.material import Boundary, Pressure, TRBSMembrane
@@ -19,15 +18,6 @@ def test_toml_round_trip(path: Path, tmp_path: Path) -> None:
     toml = tmp_path / "model.toml"
     model.to_toml(toml)
     assert MeristemModel.from_toml(toml) == model
-
-
-def test_growth_needs_double_rest_lengths() -> None:
-    with pytest.raises(ValueError, match="double_rest_lengths"):
-        MeristemModel(
-            membrane=TRBSMembrane(50.0, 0.0),
-            pressure=Pressure(0.01, 0.001),
-            growth=StrainGrowth(rate=1.0, threshold=0.0),
-        )
 
 
 def _rest_state(model: MeristemModel) -> ModelState:

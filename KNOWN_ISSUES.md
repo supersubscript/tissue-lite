@@ -30,7 +30,7 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 | T8 | Var 19 ("area ratio" in model files) is the total rest area. | `update` | Mislabelled output. |
 | T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth-layout files; `CellState.normal` keeps them and `SlotLayout(second_axes=True)` reproduces the overwrite on output. |
 | T10 | Var 21 ("MT stress") is the von Mises stress √(s1² + s2² − s1 s2). | `update` | Mislabelled output. |
-| T11 | Header documents p10 as "unused"; it selects double rest lengths (p10 == 1). | constructor | Misleading model files. |
+| T11 | Header documents p10 as "unused"; it selects double rest lengths (p10 == 1). | constructor | Misleading model files. tissue-lite always keeps both; the legacy reader checks p10 against the Initiate flag and rejects growth without it. |
 
 ## Concentration softening, MF=10 (`ConcentrationSoftening`)
 

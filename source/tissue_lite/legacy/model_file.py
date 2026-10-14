@@ -160,8 +160,10 @@ def build_model(reactions: list[Reaction]) -> LegacyModel:
     membrane, layout, com = _parse_membrane(trbs)
     initiate = by_name["CenterTriangulation::Initiate"]
     double = len(initiate.parameters) == 2 and initiate.parameters[1] == 1
-    if double != membrane.double_rest_lengths:
+    if double != (trbs.parameters[10] == 1):
         raise ValueError("Initiate double-edge flag and TRBS p10 disagree")
+    if not double and "CenterTriangulation::WallGrowth::StrainTRBS" in by_name:
+        raise ValueError("StrainTRBS growth needs double rest lengths (T11)")
     if initiate.indices != [[com]]:
         raise ValueError("Initiate and TRBS centre indices disagree")
     _validate_angles([r for r in reactions if r.name == "CalculateAngleVectors"])
@@ -239,7 +241,6 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
         young_fibre=p[1],
         poisson_longitudinal=p[2],
         poisson_transverse=p[3],
-        double_rest_lengths=p[10] == 1,
         softening=softening,
     )
     layout = SlotLayout(

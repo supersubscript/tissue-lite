@@ -74,6 +74,16 @@ def test_rejects_unsupported_reactions(
         read_model_file(path)
 
 
+def test_rejects_growth_without_double_rest_lengths(tmp_path: Path) -> None:
+    text = _model_text("aniso_growth")
+    text = text.replace("1    # double edges", "0    # double edges", 1)
+    text = text.replace("1    # unused", "0    # unused", 1)
+    path = tmp_path / "model.model"
+    path.write_text(text)
+    with pytest.raises(ValueError, match="needs double rest lengths"):
+        read_model_file(path)
+
+
 def test_rejects_other_solvers(tmp_path: Path) -> None:
     path = tmp_path / "solver.rk5"
     path.write_text("RK4\n0 1\n2 2\n0.01\n")

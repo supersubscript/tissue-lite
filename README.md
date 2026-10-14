@@ -8,7 +8,7 @@ It reproduces Tissue e74e457 **bit for bit** on every regression case and on the
 
 | Kept | Tissue reaction | tissue-lite |
 |---|---|---|
-| Anisotropic TRBS membrane on the centre triangulation (single and double rest lengths) | `VertexFromTRBScenterTriangulationMT` (MF=1) | `material.TRBSMembrane`, `forces.compute_trbs_forces` |
+| Anisotropic TRBS membrane on the centre triangulation (both spoke rest lengths always kept) | `VertexFromTRBScenterTriangulationMT` (MF=1) | `material.TRBSMembrane`, `forces.compute_trbs_forces` |
 | Concentration-driven softening (e.g. auxin) | same, MF=10 | `material.ConcentrationSoftening` |
 | Turgor pressure with linear ramp | `Pressure3D::CenterTriangulation::Linear` | `material.Pressure`, `forces.compute_pressure_forces` |
 | Fixed boundary (all axes or some) | `VertexNoUpdateBoundary` | `material.Boundary` |
