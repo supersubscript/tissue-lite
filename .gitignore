@@ -1,0 +1,25 @@
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/dist/
+**/build/
+**/.venv/
+
+# Tools
+**/.pytest_cache/
+**/.ruff_cache/
+**/.ty_cache/
+
+# Simulation outputs
+/outputs/
+/vtk/
+
+# Reference binary build (see reference/build_reference.sh)
+/reference/build/
+
+# OS / editor
+**/.DS_Store
+**/.idea/
+**/.vscode/
+**/*.swp
