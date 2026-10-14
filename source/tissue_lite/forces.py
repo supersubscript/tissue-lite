@@ -10,21 +10,27 @@ import numba
 import numpy as np
 
 from tissue_lite.arrays import FloatArray, IntArray
-from tissue_lite.material import Material, compute_moduli
-from tissue_lite.rand import glibc_rand
+from tissue_lite.material import (
+    Material,
+    compute_anisotropic_stress,
+    compute_fibre_direction,
+    compute_green_strain,
+    compute_lame_parameters,
+    compute_moduli,
+)
 from tissue_lite.tissue import CellState
-from tissue_lite.triangles import RestLengths, TriangleMesh
+from tissue_lite.triangles import (
+    RestLengths,
+    TriangleMesh,
+    compute_deformation_gradient,
+    compute_plane_coordinates,
+    compute_shape_vectors,
+    compute_triangle_area,
+    compute_triangle_geometry,
+    get_rest_lengths,
+)
 
-_PI = 3.14159265
 _SLIVER = 0.0001
-RANDOM_THRESHOLD = 0.0001
-
-
-@numba.njit(cache=True)
-def random_direction(rand_state: IntArray) -> tuple[float, float]:
-    """Tissue's fallback when the projected microtubule direction vanishes."""
-    angle = ((glibc_rand(rand_state) % 360) * 2 * _PI) / 360
-    return np.cos(angle), np.sin(angle)
 
 
 @numba.njit(cache=True)
@@ -43,56 +49,34 @@ def compute_trbs_forces(
 
     Also writes each cell's transverse modulus into `cells.young_transverse`.
     """
-    offsets, tri_v2, tri_v3, tri_wall, spoke_start, spoke_end, wall_vertices = mesh
-    spokes, wall_lengths, extensions = rest
-    x = vertices
+    offsets = mesh.offsets
     vd = vertex_forces
     cd = centre_forces
-    nu_l = material.poisson_longitudinal
-    nu_t = material.poisson_transverse
-    double = material.double_rest_lengths
     for c in range(offsets.shape[0] - 1):
         young_l, young_t = compute_moduli(cells, c, material)
         cells.young_transverse[c] = young_t
-        lam_l = young_l * nu_l / (1 - nu_l * nu_l)
-        mio_l = young_l / (2 * (1 + nu_l))
-        lam_t = young_t * nu_t / (1 - nu_t * nu_t)
-        mio_t = young_t / (2 * (1 + nu_t))
-        a_g0 = cells.microtubule[c, 0]
-        a_g1 = cells.microtubule[c, 1]
-        a_g2 = cells.microtubule[c, 2]
+        lam_l, mio_l = compute_lame_parameters(young_l, material.poisson_longitudinal)
+        lam_t, mio_t = compute_lame_parameters(young_t, material.poisson_transverse)
+        d_lam = lam_l - lam_t
+        d_mio = mio_l - mio_t
+        microtubule = (
+            cells.microtubule[c, 0],
+            cells.microtubule[c, 1],
+            cells.microtubule[c, 2],
+        )
         for t in range(offsets[c], offsets[c + 1]):
-            i2 = tri_v2[t]
-            i3 = tri_v3[t]
-            w = tri_wall[t]
-            r0 = spokes[spoke_start[t]]
-            r1 = wall_lengths[w] + extensions[t] if double else wall_lengths[w]
-            r2 = spokes[spoke_end[t]]
-            p00, p01, p02 = centres[c, 0], centres[c, 1], centres[c, 2]
-            p10, p11, p12 = x[i2, 0], x[i2, 1], x[i2, 2]
-            p20, p21, p22 = x[i3, 0], x[i3, 1], x[i3, 2]
-            wa = wall_vertices[w, 0]
-            wb = wall_vertices[w, 1]
-            l0 = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
-            dist = 0.0
-            for d in range(3):
-                dist += (x[wa, d] - x[wb, d]) * (x[wa, d] - x[wb, d])
-            l1 = np.sqrt(dist)
-            l2 = np.sqrt(
-                (p00 - p20) * (p00 - p20)
-                + (p01 - p21) * (p01 - p21)
-                + (p02 - p22) * (p02 - p22)
-            )
-            rest_area = (
-                np.sqrt(
-                    (r0 + r1 + r2) * (-r0 + r1 + r2) * (r0 - r1 + r2) * (r0 + r1 - r2)
-                )
-                * 0.25
-            )
+            i2 = mesh.v2[t]
+            i3 = mesh.v3[t]
+            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            p00, p01, p02 = tri.centre
+            p10, p11, p12 = tri.vertex_a
+            p20, p21, p22 = tri.vertex_b
+            l0, l1, l2 = tri.lengths
+            xc0, xc1, xc2 = tri.x_axis
+            yc0, yc1, yc2 = tri.y_axis
+            rest_lengths = get_rest_lengths(mesh, rest, t, material.double_rest_lengths)
+            r0, r1, r2 = rest_lengths
+            rest_area = compute_triangle_area(rest_lengths)
             cos0 = (r0 * r0 + r2 * r2 - r1 * r1) / (r0 * r2 * 2)
             cos1 = (r0 * r0 + r1 * r1 - r2 * r2) / (r0 * r1 * 2)
             cos2 = (r1 * r1 + r2 * r2 - r0 * r0) / (r1 * r2 * 2)
@@ -110,79 +94,19 @@ def compute_trbs_forces(
             dl0 = l0 * l0 - r0 * r0
             dl1 = l1 * l1 - r1 * r1
             dl2 = l2 * l2 - r2 * r2
-            ca = (l0 * l0 + l1 * l1 - l2 * l2) / (l0 * l1 * 2)
-            qa = ca * l0
-            qc = np.sqrt(1 - ca * ca) * l0
-            qb = l1
-            ra = (r0 * r0 + r1 * r1 - r2 * r2) / (r0 * r1 * 2)
-            pa = ra * r0
-            pc = np.sqrt(1 - ra * ra) * r0
-            pb = r1
-            sv00 = 0.0
-            sv01 = 1 / pc
-            sv10 = -1 / pb
-            sv11 = (pa - pb) / (pb * pc)
-            sv20 = 1 / pb
-            sv21 = -pa / (pb * pc)
-            temp_a = np.sqrt(
-                (p20 - p10) * (p20 - p10)
-                + (p21 - p11) * (p21 - p11)
-                + (p22 - p12) * (p22 - p12)
+            shape = compute_shape_vectors(compute_plane_coordinates(rest_lengths))
+            (sv00, sv01), (sv10, sv11), (sv20, sv21) = shape
+            gradient = compute_deformation_gradient(
+                compute_plane_coordinates(tri.lengths), shape
             )
-            xc0 = (p20 - p10) / temp_a
-            xc1 = (p21 - p11) / temp_a
-            xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / l0
-            bc1 = (p01 - p11) / l0
-            bc2 = (p02 - p12) / l0
-            zc0 = xc1 * bc2 - xc2 * bc1
-            zc1 = xc2 * bc0 - xc0 * bc2
-            zc2 = xc0 * bc1 - xc1 * bc0
-            zn = np.sqrt(zc0 * zc0 + zc1 * zc1 + zc2 * zc2)
-            zc0 = zc0 / zn
-            zc1 = zc1 / zn
-            zc2 = zc2 / zn
-            yc0 = zc1 * xc2 - zc2 * xc1
-            yc1 = zc2 * xc0 - zc0 * xc2
-            yc2 = zc0 * xc1 - zc1 * xc0
-            al0 = xc0 * a_g0 + xc1 * a_g1 + xc2 * a_g2
-            al1 = yc0 * a_g0 + yc1 * a_g1 + yc2 * a_g2
-            d_lam = lam_l - lam_t
-            d_mio = mio_l - mio_t
-            f00 = qb * sv20
-            f10 = 0.0
-            f01 = qa * sv01 + qb * sv21
-            f11 = qc * sv01
-            ar0 = f11 * al0 - f01 * al1
-            ar1 = -f10 * al0 + f00 * al1
-            measure = np.sqrt(ar0 * ar0 + ar1 * ar1)
-            if measure < RANDOM_THRESHOLD:
-                ar0, ar1 = random_direction(rand_state)
-            else:
-                ar0 = ar0 / measure
-                ar1 = ar1 / measure
-            aa00 = ar0 * ar0
-            aa01 = ar0 * ar1
-            aa10 = ar1 * ar0
-            aa11 = ar1 * ar1
-            e00 = 0.5 * (f00 * f00 + f10 * f10 - 1)
-            e01 = 0.5 * (f00 * f01 + f10 * f11)
-            e10 = 0.5 * (f01 * f00 + f11 * f10)
-            e11 = 0.5 * (f01 * f01 + f11 * f11 - 1)
-            tr_e = e00 + e11
-            at_ea = ar0 * ar0 * e00 + ar0 * ar1 * (e01 + e10) + ar1 * ar1 * e11
-            eaa00 = e00 * aa00 + e01 * aa10
-            eaa01 = e00 * aa01 + e01 * aa11
-            eaa10 = e10 * aa00 + e11 * aa10
-            eaa11 = e10 * aa01 + e11 * aa11
-            aae00 = aa00 * e00 + aa01 * e10
-            aae01 = aa00 * e01 + aa01 * e11
-            aae10 = aa10 * e00 + aa11 * e10
-            aae11 = aa10 * e01 + aa11 * e11
-            ds00 = (d_lam / 2) * (tr_e * aa00 + at_ea) + d_mio * (eaa00 + aae00)
-            ds01 = (d_lam / 2) * (tr_e * aa01) + d_mio * (eaa01 + aae01)
-            ds10 = (d_lam / 2) * (tr_e * aa10) + d_mio * (eaa10 + aae10)
-            ds11 = (d_lam / 2) * (tr_e * aa11 + at_ea) + d_mio * (eaa11 + aae11)
+            (f00, f01), (f10, f11) = gradient
+            fibre = compute_fibre_direction(
+                gradient, tri.x_axis, tri.y_axis, microtubule, rand_state
+            )
+            strain = compute_green_strain(gradient)
+            (ds00, ds01), (ds10, ds11) = compute_anisotropic_stress(
+                strain, fibre, d_lam, d_mio
+            )
             tpk00 = rest_area * (f00 * ds00 + f01 * ds10)
             tpk10 = rest_area * (f10 * ds00 + f11 * ds10)
             tpk01 = rest_area * (f00 * ds01 + f01 * ds11)
@@ -250,65 +174,12 @@ def compute_pressure_forces(
     centre_forces: FloatArray,
 ) -> None:
     """Adds `pressure * area / 2` along each triangle's normal to all three nodes."""
-    offsets, tri_v2, tri_v3, tri_wall, _, _, wall_vertices = mesh
-    x = vertices
-    vd = vertex_forces
-    cd = centre_forces
+    offsets = mesh.offsets
     for c in range(offsets.shape[0] - 1):
         for t in range(offsets[c], offsets[c + 1]):
-            i2 = tri_v2[t]
-            i3 = tri_v3[t]
-            w = tri_wall[t]
-            p00, p01, p02 = centres[c, 0], centres[c, 1], centres[c, 2]
-            p10, p11, p12 = x[i2, 0], x[i2, 1], x[i2, 2]
-            p20, p21, p22 = x[i3, 0], x[i3, 1], x[i3, 2]
-            l0 = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
-            wa = wall_vertices[w, 0]
-            wb = wall_vertices[w, 1]
-            dist = 0.0
+            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            coeff = pressure * (compute_triangle_area(tri.lengths) / 2)
             for d in range(3):
-                dist += (x[wa, d] - x[wb, d]) * (x[wa, d] - x[wb, d])
-            l1 = np.sqrt(dist)
-            l2 = np.sqrt(
-                (p00 - p20) * (p00 - p20)
-                + (p01 - p21) * (p01 - p21)
-                + (p02 - p22) * (p02 - p22)
-            )
-            area = (
-                np.sqrt(
-                    (l0 + l1 + l2) * (-l0 + l1 + l2) * (l0 - l1 + l2) * (l0 + l1 - l2)
-                )
-                * 0.25
-            )
-            temp_a = np.sqrt(
-                (p20 - p10) * (p20 - p10)
-                + (p21 - p11) * (p21 - p11)
-                + (p22 - p12) * (p22 - p12)
-            )
-            xc0 = (p20 - p10) / temp_a
-            xc1 = (p21 - p11) / temp_a
-            xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / l0
-            bc1 = (p01 - p11) / l0
-            bc2 = (p02 - p12) / l0
-            n0 = xc1 * bc2 - xc2 * bc1
-            n1 = xc2 * bc0 - xc0 * bc2
-            n2 = xc0 * bc1 - xc1 * bc0
-            nn = np.sqrt(n0 * n0 + n1 * n1 + n2 * n2)
-            n0 = n0 / nn
-            n1 = n1 / nn
-            n2 = n2 / nn
-            coeff = pressure * (area / 2)
-            cd[c, 0] += coeff * n0
-            cd[c, 1] += coeff * n1
-            cd[c, 2] += coeff * n2
-            vd[i2, 0] += coeff * n0
-            vd[i2, 1] += coeff * n1
-            vd[i2, 2] += coeff * n2
-            vd[i3, 0] += coeff * n0
-            vd[i3, 1] += coeff * n1
-            vd[i3, 2] += coeff * n2
+                centre_forces[c, d] += coeff * tri.normal[d]
+                vertex_forces[mesh.v2[t], d] += coeff * tri.normal[d]
+                vertex_forces[mesh.v3[t], d] += coeff * tri.normal[d]

@@ -12,8 +12,16 @@ import numba
 import numpy as np
 
 from tissue_lite.arrays import FloatArray
+from tissue_lite.material import pull_back_direction
 from tissue_lite.tissue import CellState
-from tissue_lite.triangles import RestLengths, TriangleMesh
+from tissue_lite.triangles import (
+    RestLengths,
+    TriangleMesh,
+    compute_deformation_gradient,
+    compute_shape_vectors,
+    compute_triangle_geometry,
+    get_rest_lengths,
+)
 
 
 @dataclass(frozen=True)
@@ -36,9 +44,10 @@ def update_growth(
     threshold: float,
 ) -> None:
     """Applies one explicit growth update of length h to the double rest lengths."""
-    offsets, tri_v2, tri_v3, tri_wall, spoke_start, spoke_end, wall_vertices = mesh
-    spokes, wall_lengths, extensions = rest
-    x = vertices
+    offsets = mesh.offsets
+    spokes = rest.spokes
+    wall_lengths = rest.wall_lengths
+    extensions = rest.wall_extensions
     comp = np.empty((3, 2))
     for c in range(offsets.shape[0] - 1):
         start = offsets[c]
@@ -46,36 +55,19 @@ def update_growth(
         cells.growth_count[c] = 0
         g1 = cells.growth_signal[c]
         g2 = cells.stress_max[c]
-        gg0 = cells.microtubule[c, 0]
-        gg1 = cells.microtubule[c, 1]
-        gg2 = cells.microtubule[c, 2]
+        growth_axis = (
+            cells.microtubule[c, 0],
+            cells.microtubule[c, 1],
+            cells.microtubule[c, 2],
+        )
         for k in range(n_walls):
             t = start + k
-            i2 = tri_v2[t]
-            i3 = tri_v3[t]
-            w = tri_wall[t]
-            rl0 = spokes[spoke_start[t]]
-            rl2 = spokes[spoke_end[t]]
-            rl1 = wall_lengths[w] + extensions[t]
-            p00, p01, p02 = centres[c, 0], centres[c, 1], centres[c, 2]
-            p10, p11, p12 = x[i2, 0], x[i2, 1], x[i2, 2]
-            p20, p21, p22 = x[i3, 0], x[i3, 1], x[i3, 2]
-            l0 = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
-            )
-            wa = wall_vertices[w, 0]
-            wb = wall_vertices[w, 1]
-            dist = 0.0
-            for d in range(3):
-                dist += (x[wa, d] - x[wb, d]) * (x[wa, d] - x[wb, d])
-            l1 = np.sqrt(dist)
-            l2 = np.sqrt(
-                (p00 - p20) * (p00 - p20)
-                + (p01 - p21) * (p01 - p21)
-                + (p02 - p22) * (p02 - p22)
-            )
+            w = mesh.wall[t]
+            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            l0, l1, l2 = tri.lengths
+            rl0, rl1, rl2 = get_rest_lengths(mesh, rest, t, True)
+            # Tissue's growth uses acos/cos/sin here, not the cos/sqrt(1 - cos²) of the
+            # membrane, so the deformation gradient differs from it in the last bits.
             angle = np.arccos((l0 * l0 + l1 * l1 - l2 * l2) / (l0 * l1 * 2))
             qa = np.cos(angle) * l0
             qc = np.sin(angle) * l0
@@ -86,38 +78,12 @@ def update_growth(
             pa = np.cos(rest_angle) * rl0
             pc = np.sin(rest_angle) * rl0
             pb = rl1
-            sv01 = 1 / pc
-            sv20 = 1 / pb
-            sv21 = -pa / (pb * pc)
-            f00 = qb * sv20
-            f10 = 0.0
-            f01 = qa * sv01 + qb * sv21
-            f11 = qc * sv01
-            temp_a = np.sqrt(
-                (p20 - p10) * (p20 - p10)
-                + (p21 - p11) * (p21 - p11)
-                + (p22 - p12) * (p22 - p12)
+            gradient = compute_deformation_gradient(
+                (qa, qb, qc), compute_shape_vectors((pa, pb, pc))
             )
-            xc0 = (p20 - p10) / temp_a
-            xc1 = (p21 - p11) / temp_a
-            xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / l0
-            bc1 = (p01 - p11) / l0
-            bc2 = (p02 - p12) / l0
-            zc0 = xc1 * bc2 - xc2 * bc1
-            zc1 = xc2 * bc0 - xc0 * bc2
-            zc2 = xc0 * bc1 - xc1 * bc0
-            zn = np.sqrt(zc0 * zc0 + zc1 * zc1 + zc2 * zc2)
-            zc0 = zc0 / zn
-            zc1 = zc1 / zn
-            zc2 = zc2 / zn
-            yc0 = zc1 * xc2 - zc2 * xc1
-            yc1 = zc2 * xc0 - zc0 * xc2
-            yc2 = zc0 * xc1 - zc1 * xc0
-            gl0 = xc0 * gg0 + xc1 * gg1 + xc2 * gg2
-            gl1 = yc0 * gg0 + yc1 * gg1 + yc2 * gg2
-            gr0 = f11 * gl0 - f01 * gl1
-            gr1 = -f10 * gl0 + f00 * gl1
+            gr0, gr1 = pull_back_direction(
+                gradient, tri.x_axis, tri.y_axis, growth_axis
+            )
             gnorm = np.sqrt(gr0 * gr0 + gr1 * gr1)
             gr0 /= gnorm
             gr1 /= gnorm
@@ -149,5 +115,5 @@ def update_growth(
             external = np.sqrt(comp[1, 0] * comp[1, 0] + comp[1, 1] * comp[1, 1])
             internal_next = np.sqrt(comp[2, 0] * comp[2, 0] + comp[2, 1] * comp[2, 1])
             extensions[t] = external - wall_lengths[w]
-            spokes[spoke_start[t]] = internal
-            spokes[spoke_end[t]] = internal_next
+            spokes[mesh.spoke_start[t]] = internal
+            spokes[mesh.spoke_end[t]] = internal_next

@@ -10,10 +10,26 @@ import numba
 import numpy as np
 
 from tissue_lite.arrays import FloatArray, IntArray
-from tissue_lite.forces import RANDOM_THRESHOLD, random_direction
-from tissue_lite.material import Material, compute_moduli
+from tissue_lite.material import (
+    Material,
+    compute_anisotropic_stress,
+    compute_fibre_direction,
+    compute_fibre_strain,
+    compute_green_strain,
+    compute_lame_parameters,
+    compute_moduli,
+)
 from tissue_lite.tissue import CellState
-from tissue_lite.triangles import RestLengths, TriangleMesh
+from tissue_lite.triangles import (
+    RestLengths,
+    TriangleMesh,
+    compute_deformation_gradient,
+    compute_plane_coordinates,
+    compute_shape_vectors,
+    compute_triangle_area,
+    compute_triangle_geometry,
+    get_rest_lengths,
+)
 
 _EIGEN_TOLERANCE = 0.000001
 _C45 = 0.70710678118
@@ -131,12 +147,7 @@ def update_cell_stress(
     anisotropies, the von Mises stress, rest area and energies, and normalises the
     microtubule axis, as Tissue's `update` does.
     """
-    offsets, tri_v2, tri_v3, tri_wall, spoke_start, spoke_end, wall_vertices = mesh
-    spokes, wall_lengths, extensions = rest
-    x = vertices
-    nu_l = material.poisson_longitudinal
-    nu_t = material.poisson_transverse
-    double = material.double_rest_lengths
+    offsets = mesh.offsets
     rot = np.empty((3, 3))
     tmp = np.empty((3, 3))
     strain_t = np.empty((3, 3))
@@ -148,10 +159,10 @@ def update_cell_stress(
     normal = np.empty(3)
     for c in range(offsets.shape[0] - 1):
         young_l, young_t = compute_moduli(cells, c, material)
-        lam_l = young_l * nu_l / (1 - nu_l * nu_l)
-        mio_l = young_l / (2 * (1 + nu_l))
-        lam_t = young_t * nu_t / (1 - nu_t * nu_t)
-        mio_t = young_t / (2 * (1 + nu_t))
+        lam_l, mio_l = compute_lame_parameters(young_l, material.poisson_longitudinal)
+        lam_t, mio_t = compute_lame_parameters(young_t, material.poisson_transverse)
+        d_lam = lam_l - lam_t
+        d_mio = mio_l - mio_t
         strain_sum[:] = 0.0
         stress_sum[:] = 0.0
         normal[:] = 0.0
@@ -159,131 +170,48 @@ def update_cell_stress(
         total_area = 0.0
         energy_iso = 0.0
         energy_aniso = 0.0
-        a_g0 = cells.microtubule[c, 0]
-        a_g1 = cells.microtubule[c, 1]
-        a_g2 = cells.microtubule[c, 2]
+        microtubule = (
+            cells.microtubule[c, 0],
+            cells.microtubule[c, 1],
+            cells.microtubule[c, 2],
+        )
         for t in range(offsets[c], offsets[c + 1]):
-            i2 = tri_v2[t]
-            i3 = tri_v3[t]
-            w = tri_wall[t]
-            r0 = spokes[spoke_start[t]]
-            r1 = wall_lengths[w] + extensions[t] if double else wall_lengths[w]
-            r2 = spokes[spoke_end[t]]
-            p00, p01, p02 = centres[c, 0], centres[c, 1], centres[c, 2]
-            p10, p11, p12 = x[i2, 0], x[i2, 1], x[i2, 2]
-            p20, p21, p22 = x[i3, 0], x[i3, 1], x[i3, 2]
-            wa = wall_vertices[w, 0]
-            wb = wall_vertices[w, 1]
-            l0 = np.sqrt(
-                (p00 - p10) * (p00 - p10)
-                + (p01 - p11) * (p01 - p11)
-                + (p02 - p12) * (p02 - p12)
+            tri = compute_triangle_geometry(mesh, centres, vertices, c, t)
+            rest_lengths = get_rest_lengths(mesh, rest, t, material.double_rest_lengths)
+            rest_area = compute_triangle_area(rest_lengths)
+            area = compute_triangle_area(tri.lengths)
+            zc0, zc1, zc2 = tri.normal
+            for r in range(3):
+                rot[r, 0] = tri.x_axis[r]
+                rot[r, 1] = tri.y_axis[r]
+                rot[r, 2] = tri.normal[r]
+            shape = compute_shape_vectors(compute_plane_coordinates(rest_lengths))
+            gradient = compute_deformation_gradient(
+                compute_plane_coordinates(tri.lengths), shape
             )
-            dist = 0.0
-            for d in range(3):
-                dist += (x[wa, d] - x[wb, d]) * (x[wa, d] - x[wb, d])
-            l1 = np.sqrt(dist)
-            l2 = np.sqrt(
-                (p00 - p20) * (p00 - p20)
-                + (p01 - p21) * (p01 - p21)
-                + (p02 - p22) * (p02 - p22)
+            (f00, f01), (f10, f11) = gradient
+            fibre = compute_fibre_direction(
+                gradient, tri.x_axis, tri.y_axis, microtubule, rand_state
             )
-            rest_area = (
-                np.sqrt(
-                    (r0 + r1 + r2) * (-r0 + r1 + r2) * (r0 - r1 + r2) * (r0 + r1 - r2)
-                )
-                * 0.25
-            )
-            area = (
-                np.sqrt(
-                    (l0 + l1 + l2) * (-l0 + l1 + l2) * (l0 - l1 + l2) * (l0 + l1 - l2)
-                )
-                * 0.25
-            )
-            ca = (l0 * l0 + l1 * l1 - l2 * l2) / (l0 * l1 * 2)
-            qa = ca * l0
-            qc = np.sqrt(1 - ca * ca) * l0
-            qb = l1
-            ra = (r0 * r0 + r1 * r1 - r2 * r2) / (r0 * r1 * 2)
-            pa = ra * r0
-            pc = np.sqrt(1 - ra * ra) * r0
-            pb = r1
-            sv01 = 1 / pc
-            sv21 = -pa / (pb * pc)
-            sv20 = 1 / pb
-            temp_a = np.sqrt(
-                (p20 - p10) * (p20 - p10)
-                + (p21 - p11) * (p21 - p11)
-                + (p22 - p12) * (p22 - p12)
-            )
-            xc0 = (p20 - p10) / temp_a
-            xc1 = (p21 - p11) / temp_a
-            xc2 = (p22 - p12) / temp_a
-            bc0 = (p00 - p10) / l0
-            bc1 = (p01 - p11) / l0
-            bc2 = (p02 - p12) / l0
-            zc0 = xc1 * bc2 - xc2 * bc1
-            zc1 = xc2 * bc0 - xc0 * bc2
-            zc2 = xc0 * bc1 - xc1 * bc0
-            zn = np.sqrt(zc0 * zc0 + zc1 * zc1 + zc2 * zc2)
-            zc0 = zc0 / zn
-            zc1 = zc1 / zn
-            zc2 = zc2 / zn
-            yc0 = zc1 * xc2 - zc2 * xc1
-            yc1 = zc2 * xc0 - zc0 * xc2
-            yc2 = zc0 * xc1 - zc1 * xc0
-            rot[0, 0], rot[0, 1], rot[0, 2] = xc0, yc0, zc0
-            rot[1, 0], rot[1, 1], rot[1, 2] = xc1, yc1, zc1
-            rot[2, 0], rot[2, 1], rot[2, 2] = xc2, yc2, zc2
-            al0 = xc0 * a_g0 + xc1 * a_g1 + xc2 * a_g2
-            al1 = yc0 * a_g0 + yc1 * a_g1 + yc2 * a_g2
-            d_lam = lam_l - lam_t
-            d_mio = mio_l - mio_t
-            f00 = qb * sv20
-            f10 = 0.0
-            f01 = qa * sv01 + qb * sv21
-            f11 = qc * sv01
-            ar0 = f11 * al0 - f01 * al1
-            ar1 = -f10 * al0 + f00 * al1
-            measure = np.sqrt(ar0 * ar0 + ar1 * ar1)
-            if measure < RANDOM_THRESHOLD:
-                ar0, ar1 = random_direction(rand_state)
-            else:
-                ar0 = ar0 / measure
-                ar1 = ar1 / measure
-            aa00 = ar0 * ar0
-            aa01 = ar0 * ar1
-            aa10 = ar1 * ar0
-            aa11 = ar1 * ar1
+            strain = compute_green_strain(gradient)
+            (e00, e01), (e10, e11) = strain
             b00 = f00 * f00 + f01 * f01
             b01 = f00 * f10 + f01 * f11
             b10 = f10 * f00 + f11 * f01
             b11 = f10 * f10 + f11 * f11
-            e00 = 0.5 * (f00 * f00 + f10 * f10 - 1)
-            e01 = 0.5 * (f00 * f01 + f10 * f11)
-            e10 = 0.5 * (f01 * f00 + f11 * f10)
-            e11 = 0.5 * (f01 * f01 + f11 * f11 - 1)
             ee00 = e00 * e00 + e01 * e10
             ee01 = e00 * e01 + e01 * e11
             ee10 = e10 * e00 + e11 * e10
             ee11 = e10 * e01 + e11 * e11
             tr_e = e00 + e11
             i2_inv = ee00 + ee11
-            i5 = ar0 * ar0 * ee00 + ar0 * ar1 * (ee01 + ee10) + ar1 * ar1 * ee11
+            i5 = compute_fibre_strain(((ee00, ee01), (ee10, ee11)), fibre)
             det_b = b00 * b11 - b10 * b01
             alm00 = 0.5 * (1 - (b11 / det_b))
             alm01 = 0.5 * b01 / det_b
             alm10 = 0.5 * b10 / det_b
             alm11 = 0.5 * (1 - (b00 / det_b))
-            at_ea = ar0 * ar0 * e00 + ar0 * ar1 * (e01 + e10) + ar1 * ar1 * e11
-            eaa00 = e00 * aa00 + e01 * aa10
-            eaa01 = e00 * aa01 + e01 * aa11
-            eaa10 = e10 * aa00 + e11 * aa10
-            eaa11 = e10 * aa01 + e11 * aa11
-            aae00 = aa00 * e00 + aa01 * e10
-            aae01 = aa00 * e01 + aa01 * e11
-            aae10 = aa10 * e00 + aa11 * e10
-            aae11 = aa10 * e01 + aa11 * e11
+            at_ea = compute_fibre_strain(strain, fibre)
             bb00 = b00 * b00 + b01 * b10
             bb01 = b00 * b01 + b01 * b11
             bb10 = b10 * b00 + b11 * b10
@@ -294,10 +222,9 @@ def update_cell_stress(
             sg01 = area_factor * (g * b01 + mio_t * bb01)
             sg10 = area_factor * (g * b10 + mio_t * bb10)
             sg11 = area_factor * (g * b11 + mio_t * bb11)
-            ds00 = (d_lam / 2) * (tr_e * aa00 + at_ea) + d_mio * (eaa00 + aae00)
-            ds01 = (d_lam / 2) * (tr_e * aa01) + d_mio * (eaa01 + aae01)
-            ds10 = (d_lam / 2) * (tr_e * aa10) + d_mio * (eaa10 + aae10)
-            ds11 = (d_lam / 2) * (tr_e * aa11 + at_ea) + d_mio * (eaa11 + aae11)
+            (ds00, ds01), (ds10, ds11) = compute_anisotropic_stress(
+                strain, fibre, d_lam, d_mio
+            )
             dsf00 = ds00 * f00 + ds01 * f01
             dsf10 = ds10 * f00 + ds11 * f01
             dsf01 = ds00 * f10 + ds01 * f11
@@ -434,7 +361,11 @@ def update_cell_stress(
         cells.strain_perpendicular[c, 1] = perp1
         cells.strain_perpendicular[c, 2] = perp2
         cells.strain_second[c] = e2
-        mt_norm = np.sqrt(a_g0 * a_g0 + a_g1 * a_g1 + a_g2 * a_g2)
+        mt_norm = np.sqrt(
+            microtubule[0] * microtubule[0]
+            + microtubule[1] * microtubule[1]
+            + microtubule[2] * microtubule[2]
+        )
         if mt_norm > 0:
             for d in range(3):
                 cells.microtubule[c, d] = cells.microtubule[c, d] / mt_norm
