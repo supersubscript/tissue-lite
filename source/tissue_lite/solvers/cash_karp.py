@@ -93,26 +93,32 @@ def _retry_step(
     state: ModelState,
     t: float,
     h_try: float,
-    vd: FloatArray,
-    cd: FloatArray,
+    vertex_forces: FloatArray,
+    centre_forces: FloatArray,
     scale_v: FloatArray,
     scale_c: FloatArray,
-    eps: float,
+    tolerance: float,
 ) -> tuple[float, float]:
-    """Port of `rkqs`: retries until the error is within tolerance; updates state."""
+    """Port of `rkqs`: shrinks the step until the scaled error is within tolerance,
+    then writes the new positions and returns (step taken, next step)."""
     h = h_try
     tissue = state.tissue
     triangulation = state.triangulation
     while True:
         x_out, c_out, x_err, c_err = _cash_karp_step(
-            state, tissue.vertices, triangulation.centres, vd, cd, h
+            state,
+            tissue.vertices,
+            triangulation.centres,
+            vertex_forces,
+            centre_forces,
+            h,
         )
         err_max = max(
             float(np.max(np.abs(c_err / scale_c))),
             float(np.max(np.abs(x_err / scale_v))),
             0.0,
         )
-        err_max /= eps
+        err_max /= tolerance
         if err_max <= 1.0:
             break
         h_temp = _SAFETY * h * math.pow(err_max, _PSHRINK)
@@ -133,7 +139,8 @@ def _cash_karp_step(
     k1c: FloatArray,
     h: float,
 ) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-    """Port of `rkck`: one Cash–Karp step with its embedded error estimate.
+    """Port of `rkck`: one Cash–Karp step from vertices x and centres c with
+    derivatives k1, returning (x, c, x error, c error).
 
     Stage derivatives see a copy of the cell state, so their side effects are
     discarded as in Tissue.

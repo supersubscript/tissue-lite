@@ -123,10 +123,26 @@ def compute_moduli(cells: CellState, c: int, material: Material) -> tuple[float,
     return young_l, young_t
 
 
+class Lame(NamedTuple):
+    """Plane-stress Lamé parameters of the longitudinal and transverse moduli."""
+
+    lambda_l: float
+    mu_l: float
+    lambda_t: float
+    mu_t: float
+
+
 @numba.njit(cache=True)
-def compute_lame_parameters(young: float, poisson: float) -> tuple[float, float]:
-    """Returns the plane-stress (λ, μ) of a modulus, as Tissue forms them."""
-    return young * poisson / (1 - poisson * poisson), young / (2 * (1 + poisson))
+def compute_lame_parameters(young_l: float, young_t: float, material: Material) -> Lame:
+    """Returns (λ, μ) of both moduli, each as Tissue forms them from E and ν."""
+    nu_l = material.poisson_longitudinal
+    nu_t = material.poisson_transverse
+    return Lame(
+        young_l * nu_l / (1 - nu_l * nu_l),
+        young_l / (2 * (1 + nu_l)),
+        young_t * nu_t / (1 - nu_t * nu_t),
+        young_t / (2 * (1 + nu_t)),
+    )
 
 
 @numba.njit(cache=True)
