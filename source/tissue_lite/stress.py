@@ -64,8 +64,7 @@ def update_cell_stress(
     T5; Jacobi signs as in Tissue, T4), their anisotropies, the von Mises stress (T10),
     the total rest area (T8) and the energies, and normalises `cells.microtubule`, as
     Tissue's `update` does. The anisotropic energy also goes into `young_transverse`
-    (Tissue's slot 20, T7). The reported stress is not exactly that of the force model
-    (T6). A vanishing fibre direction consumes `rand_state` (T1).
+    (Tissue's slot 20, T7). A vanishing fibre direction consumes `rand_state` (T1).
 
     Raises:
         ZeroDivisionError: If a triangle is degenerate.
@@ -183,7 +182,8 @@ def _compute_cauchy_stress(
     area_factor: float,
 ) -> Matrix2:
     """Cauchy stress σ = (A_rest / A) F S Fᵀ, with S the Saint Venant-Kirchhoff stress
-    of the transverse material plus the fibre stress (KNOWN_ISSUES T6)."""
+    of the transverse material plus the fibre stress, the stress of the force model
+    (Delingette's springs are SVK)."""
     (b00, b01), (b10, b11) = left_cauchy_green
     (bb00, bb01), (bb10, bb11) = multiply(left_cauchy_green, left_cauchy_green)
     mu_t = lame.mu_t

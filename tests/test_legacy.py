@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 from conftest import CASES_DIR, MODELS
 
-from tissue_lite.legacy.model_file import parse_reactions, read_model_file
+from tissue_lite.legacy.model_file import (
+    build_model,
+    parse_reactions,
+    read_model_file,
+)
 from tissue_lite.legacy.solver_file import read_solver_file
 
 
@@ -41,6 +45,18 @@ def test_softening_parameters() -> None:
     legacy = read_model_file(CASES_DIR / "auxin_softening" / "model.model")
     assert legacy.model.membrane.softening is not None
     assert legacy.layout.concentration_slot == 41
+
+
+@pytest.mark.parametrize(
+    ("hill", "warns"), [("0.005 2", True), ("2 2", False)], ids=["differ", "same"]
+)
+def test_warns_on_ignored_hill_parameters(
+    hill: str, warns: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    text = _model_text("auxin_softening_hill").replace("0.005 2 #", f"{hill} #")
+    with caplog.at_level(logging.WARNING):
+        build_model(parse_reactions(text))
+    assert ("p11 = " in caplog.text) == warns
 
 
 def test_warns_on_fibre_moduli_mismatch(caplog: pytest.LogCaptureFixture) -> None:
