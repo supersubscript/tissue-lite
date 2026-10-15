@@ -183,11 +183,22 @@ def compute_fibre_direction(
     (without 1/det F, KNOWN_ISSUES T2) the axis is a random whole degree instead: one
     draw from `rand_state`, advanced in place (T1).
     """
+    found, a0, a1 = find_fibre_direction(gradient, x_axis, y_axis, microtubule)
+    return (a0, a1) if found else _sample_random_direction(rand_state)
+
+
+@numba.njit(cache=True)
+def find_fibre_direction(
+    gradient: Matrix2, x_axis: Vector, y_axis: Vector, microtubule: Vector
+) -> tuple[bool, float, float]:
+    """`compute_fibre_direction` without the random fallback: returns (False, 0, 0)
+    where that would draw from `rand_state`, so callers can run in parallel and make
+    the draws afterwards in Tissue's order."""
     a0, a1 = pull_back_direction(gradient, x_axis, y_axis, microtubule)
     measure = np.sqrt(a0 * a0 + a1 * a1)
     if measure < _RANDOM_THRESHOLD:
-        return _sample_random_direction(rand_state)
-    return a0 / measure, a1 / measure
+        return False, 0.0, 0.0
+    return True, a0 / measure, a1 / measure
 
 
 @numba.njit(cache=True)

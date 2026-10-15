@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 import click
+import numba
 
 from tissue_lite.legacy.init_file import read_init, write_init
 from tissue_lite.legacy.model_file import read_model_file
@@ -76,6 +77,13 @@ _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
     show_default=True,
     help="Feedback step of the quasi-static and implicit solvers.",
 )
+@click.option(
+    "--threads",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Threads for the force kernel; results do not depend on it.",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Logs debug messages.")
 def main(
     model_file: Path,
@@ -87,12 +95,14 @@ def main(
     concentration_slot: int | None,
     solver_name: str,
     step: float,
+    threads: int,
     verbose: bool,
 ) -> None:
     """Simulates MODEL_FILE from INIT_FILE with the settings in SOLVER_FILE."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO, format="%(message)s"
     )
+    numba.set_num_threads(threads)
     if model_file.suffix == ".toml":
         model = MeristemModel.from_toml(model_file)
         layout = SlotLayout(

@@ -200,20 +200,13 @@ class ModelState:
             derivatives[:num_vertices],
             derivatives[num_vertices:],
         )
-        forces.compute_trbs_forces(
+        forces.compute_forces(
             self.mesh,
             centres,
             vertices,
             cells,
             self._material,
             self.rand_state,
-            vertex_forces,
-            centre_forces,
-        )
-        forces.compute_pressure_forces(
-            self.mesh,
-            centres,
-            vertices,
             self.pressure_factor * self.model.pressure.pressure,
             vertex_forces,
             centre_forces,
