@@ -56,7 +56,7 @@ class QuasiStatic:
 
     step: float = 0.1
     force_tolerance: float = 1e-6
-    max_iterations: int = 500
+    max_iterations: int = 5000  # stiff domes need ~1000 on their first step
 
     def __post_init__(self) -> None:
         if min(self.step, self.force_tolerance, self.max_iterations) <= 0:
