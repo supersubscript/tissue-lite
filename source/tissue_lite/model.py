@@ -180,14 +180,18 @@ class ModelState:
         """Evaluates `compute_forces_at` on the real state, keeping its diagnostics."""
         return self.compute_forces_at(self.tissue.cells, self.positions)
 
-    def compute_forces_at(self, cells: CellState, positions: FloatArray) -> FloatArray:
+    def compute_forces_at(
+        self, cells: CellState, positions: FloatArray, record_diagnostics: bool = True
+    ) -> FloatArray:
         """Returns the (V + C, 3) derivative of `positions` (vertices, then centres).
 
         `positions` may be a trial state. Writes the diagnostics (angles, volume change,
         velocity) and, without softening, the transverse moduli into `cells`, so stage
-        evaluations pass a copy of the cells (KNOWN_ISSUES S5). Uses the current
-        `pressure_factor`. Zeroes the fixed boundary components after the volume
-        diagnostic (L2). A vanishing fibre direction consumes `rand_state` (T1).
+        evaluations pass a copy of the cells (KNOWN_ISSUES S5). The diagnostics do not
+        feed back into the derivative; `record_diagnostics=False` skips them where the
+        cell state is discarded. Uses the current `pressure_factor`. Zeroes the fixed
+        boundary components after the volume diagnostic (L2). A vanishing fibre
+        direction consumes `rand_state` (T1).
         """
         num_vertices = self.tissue.topology.num_vertices
         vertices, centres = positions[:num_vertices], positions[num_vertices:]
@@ -214,12 +218,13 @@ class ModelState:
             vertex_forces,
             centre_forces,
         )
-        diagnostics.update_angle_diagnostics(cells)
-        diagnostics.update_volume_change(
-            cells.volume_change, vertices, self.rest_positions, vertex_forces
-        )
+        if record_diagnostics:
+            diagnostics.update_angle_diagnostics(cells)
+            diagnostics.update_volume_change(
+                cells.volume_change, vertices, self.rest_positions, vertex_forces
+            )
         vertex_forces[self.fixed] = 0.0
-        if self.model.track_velocity:
+        if record_diagnostics and self.model.track_velocity:
             diagnostics.update_cell_velocity(
                 cells.velocity, self.mesh.offsets, self.mesh.vertex_a, vertex_forces
             )
@@ -233,7 +238,9 @@ class ModelState:
         state is left untouched.
         """
         rand_state = self.rand_state.copy()
-        derivatives = self.compute_forces_at(self.tissue.cells.copy(), positions)
+        derivatives = self.compute_forces_at(
+            self.tissue.cells.copy(), positions, record_diagnostics=False
+        )
         self.rand_state[:] = rand_state
         return derivatives
 
