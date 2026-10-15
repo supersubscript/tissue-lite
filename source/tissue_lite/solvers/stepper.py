@@ -37,7 +37,11 @@ class Stepper(Protocol):
 
     @property
     def fidelity(self) -> bool:
-        """Whether runs print t_end twice, as Tissue does (KNOWN_ISSUES S6)."""
+        """Whether runs print t_end twice, as Tissue does (KNOWN_ISSUES S6).
+
+        TODO: remove `fidelity` (here and on the steppers) long-term. It only reproduces
+        a Tissue artefact; the non-fidelity schedule should become the only one.
+        """
         ...
 
     @property
