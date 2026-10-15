@@ -70,10 +70,6 @@ def update_cell_stress(
     Raises:
         ZeroDivisionError: If a triangle is degenerate.
     """
-    scratch = np.empty((3, 3))
-    strain_mean = np.empty((3, 3))
-    stress_mean = np.empty((3, 3))
-    eigenvectors = np.empty((3, 3))
     for c in range(mesh.offsets.shape[0] - 1):
         young_l, young_t = compute_moduli(
             cells.young_longitudinal[c], cells.concentration[c], material
@@ -127,26 +123,23 @@ def update_cell_stress(
             energy_iso += iso * rest_area
             energy_aniso += aniso * rest_area
         # Cell means, normal, principal axes and scalars.
-        _write_mean(strain_mean, strain_sum, total_area)
-        _write_mean(stress_mean, stress_sum, total_area)
+        strain_mean = _divide3(strain_sum, total_area)
+        stress_mean = _divide3(stress_sum, total_area)
         normal = _compute_unit_normal(normal_sum, total_area)
-        cells.stress_tensor[c] = stress_mean
-        cells.strain_tensor[c] = strain_mean
+        _write_matrix(cells.stress_tensor[c], stress_mean)
+        _write_matrix(cells.strain_tensor[c], strain_mean)
         cells.normal[c, 0] = normal[0]
         cells.normal[c, 1] = normal[1]
         cells.normal[c, 2] = normal[2]
-        first, second, s1, s2 = _find_principal_stress(
-            stress_mean, eigenvectors, scratch, normal
-        )
+        first, second, s1, s2 = _find_principal_stress(stress_mean, normal)
         cells.von_mises_stress[c] = np.sqrt(s1 * s1 + s2 * s2 - s1 * s2)
         cells.stress_anisotropy[c] = 0.0 if abs(s1) < _ZERO_STRESS else 1 - abs(s2 / s1)
-        cells.stress_direction[c] = eigenvectors[:, first]
-        cells.stress_direction_second[c] = eigenvectors[:, second]
+        for d in range(3):
+            cells.stress_direction[c, d] = first[d]
+            cells.stress_direction_second[c, d] = second[d]
         cells.stress_max[c] = s1
         cells.stress_second[c] = s2
-        axis, perpendicular, e1, e2 = _find_principal_strain(
-            strain_mean, eigenvectors, scratch, normal
-        )
+        axis, perpendicular, e1, e2 = _find_principal_strain(strain_mean, normal)
         cells.strain_anisotropy[c] = 0.0 if abs(e1) < _ZERO_STRESS else 1 - abs(e2 / e1)
         cells.strain_direction[c] = axis
         cells.strain_perpendicular[c] = perpendicular
@@ -301,11 +294,28 @@ def _add_scaled(total: Matrix3, weight: float, tensor: Matrix3) -> Matrix3:
 
 
 @numba.njit(cache=True)
-def _write_mean(target: FloatArray, total: Matrix3, divisor: float) -> None:
-    """Writes total / divisor into the 3×3 array, dividing each entry."""
+def _divide3(total: Matrix3, divisor: float) -> Matrix3:
+    """Returns total / divisor, dividing each entry."""
+    (t00, t01, t02), (t10, t11, t12), (t20, t21, t22) = total
+    return (
+        (t00 / divisor, t01 / divisor, t02 / divisor),
+        (t10 / divisor, t11 / divisor, t12 / divisor),
+        (t20 / divisor, t21 / divisor, t22 / divisor),
+    )
+
+
+@numba.njit(cache=True)
+def _write_matrix(target: FloatArray, matrix: Matrix3) -> None:
+    """Copies the 3×3 tuple into the array."""
     for r in range(3):
         for q in range(3):
-            target[r, q] = total[r][q] / divisor
+            target[r, q] = matrix[r][q]
+
+
+@numba.njit(cache=True)
+def _column(matrix: Matrix3, q: int) -> Vector:
+    """Returns column q of the matrix."""
+    return (matrix[0][q], matrix[1][q], matrix[2][q])
 
 
 @numba.njit(cache=True)
@@ -318,53 +328,46 @@ def _compute_unit_normal(total: Vector, total_area: float) -> Vector:
 
 @numba.njit(cache=True)
 def _find_principal_stress(
-    stress: FloatArray,
-    eigenvectors: FloatArray,
-    scratch: FloatArray,
-    normal: Vector,
-) -> tuple[int, int, float, float]:
-    """Diagonalises the cell stress in place; returns the columns of the two
-    in-plane principal axes and their stresses, largest magnitude first."""
-    _jacobi(stress, eigenvectors, True, scratch)
-    first, second, third = _rank_principal_axes(stress, True)
-    s1 = stress[first, first]
-    s2 = stress[second, second]
-    axis = (eigenvectors[0, first], eigenvectors[1, first], eigenvectors[2, first])
-    if abs(dot(normal, axis)) > _OUT_OF_PLANE:
+    stress: Matrix3, normal: Vector
+) -> tuple[Vector, Vector, float, float]:
+    """Diagonalises the cell stress; returns the two in-plane principal axes and
+    their stresses, largest magnitude first."""
+    diagonal, eigenvectors = _jacobi(stress, True)
+    first, second, third = _rank_principal_axes(diagonal, True)
+    s1 = diagonal[first][first]
+    s2 = diagonal[second][second]
+    if abs(dot(normal, _column(eigenvectors, first))) > _OUT_OF_PLANE:
         first, second = second, third
-        s1, s2 = s2, stress[third, third]
-    return first, second, s1, s2
+        s1, s2 = s2, diagonal[third][third]
+    return _column(eigenvectors, first), _column(eigenvectors, second), s1, s2
 
 
 @numba.njit(cache=True)
 def _find_principal_strain(
-    strain: FloatArray,
-    eigenvectors: FloatArray,
-    scratch: FloatArray,
-    normal: Vector,
+    strain: Matrix3, normal: Vector
 ) -> tuple[Vector, Vector, float, float]:
-    """Diagonalises the cell strain in place; returns the principal axis, the
-    in-plane perpendicular (unnormalised, KNOWN_ISSUES T9) and the two strains."""
-    _jacobi(strain, eigenvectors, False, scratch)
-    first, second, _ = _rank_principal_axes(strain, False)
-    axis = (eigenvectors[0, first], eigenvectors[1, first], eigenvectors[2, first])
+    """Diagonalises the cell strain; returns the principal axis, the in-plane
+    perpendicular (unnormalised, KNOWN_ISSUES T9) and the two strains."""
+    diagonal, eigenvectors = _jacobi(strain, False)
+    first, second, _ = _rank_principal_axes(diagonal, False)
+    axis = _column(eigenvectors, first)
     perpendicular = cross(normal, axis)
     if abs(norm(perpendicular)) < _NO_PERPENDICULAR:
         perpendicular = axis
-    return axis, perpendicular, strain[first, first], strain[second, second]
+    return axis, perpendicular, diagonal[first][first], diagonal[second][second]
 
 
 @numba.njit(cache=True)
-def _rank_principal_axes(diagonal: FloatArray, cyclic: bool) -> tuple[int, int, int]:
+def _rank_principal_axes(diagonal: Matrix3, cyclic: bool) -> tuple[int, int, int]:
     """Orders the axes of a diagonalised tensor by |value| (KNOWN_ISSUES T5).
 
     On a tie between the two smaller ones, the stress loop (`cyclic`) keeps cyclic
     order and the strain loop ascending order.
     """
     first = 0
-    if abs(diagonal[1, 1]) > abs(diagonal[first, first]):
+    if abs(diagonal[1][1]) > abs(diagonal[first][first]):
         first = 1
-    if abs(diagonal[2, 2]) > abs(diagonal[first, first]):
+    if abs(diagonal[2][2]) > abs(diagonal[first][first]):
         first = 2
     if first == 0:
         second, third = 1, 2
@@ -372,96 +375,123 @@ def _rank_principal_axes(diagonal: FloatArray, cyclic: bool) -> tuple[int, int, 
         second, third = (2, 0) if cyclic else (0, 2)
     else:
         second, third = 0, 1
-    if abs(diagonal[third, third]) > abs(diagonal[second, second]):
+    if abs(diagonal[third][third]) > abs(diagonal[second][second]):
         second, third = third, second
     return first, second, third
 
 
 @numba.njit(cache=True)
-def _pick_pivot(tensor: FloatArray) -> tuple[float, int, int]:
+def _pick_pivot(tensor: Matrix3) -> tuple[float, int, int]:
     """Returns the largest off-diagonal magnitude and its (row, column), row > col."""
-    pivot, big, small = abs(tensor[1, 0]), 1, 0
-    if abs(tensor[2, 0]) > pivot:
-        pivot, big, small = abs(tensor[2, 0]), 2, 0
-    if abs(tensor[2, 1]) > pivot:
-        pivot, big, small = abs(tensor[2, 1]), 2, 1
+    pivot, big, small = abs(tensor[1][0]), 1, 0
+    if abs(tensor[2][0]) > pivot:
+        pivot, big, small = abs(tensor[2][0]), 2, 0
+    if abs(tensor[2][1]) > pivot:
+        pivot, big, small = abs(tensor[2][1]), 2, 1
     return pivot, big, small
 
 
 @numba.njit(cache=True)
-def _rotate(
-    tensor: FloatArray,
-    eigenvectors: FloatArray,
-    big: int,
-    small: int,
-    scratch: FloatArray,
-) -> None:
-    """Applies Tissue's Jacobi rotation in the (small, big) plane in place.
-
-    The rotation sign is lost as in Tissue (KNOWN_ISSUES T4). Skipping Tissue's
-    exact products with 0 and 1 leaves the result bit-identical.
-    """
-    if abs(tensor[big, big] - tensor[small, small]) < _EIGEN_TOLERANCE:
-        si = _C45
-        co = _C45
-    else:
-        tan = (2 * tensor[big, small]) / (tensor[small, small] - tensor[big, big])
-        tan = 1 / np.sqrt(1 + tan * tan)
-        si = _C45 * np.sqrt(1 - tan) if tan < 1 else _C45 * np.sqrt(tan - 1)
-        co = _C45 * np.sqrt(1 + tan)
-    for r in range(3):
-        a_lo = tensor[r, small]
-        a_hi = tensor[r, big]
-        scratch[r, small] = a_lo * co + a_hi * si
-        scratch[r, big] = a_lo * -si + a_hi * co
-        for q in range(3):
-            if q != small and q != big:
-                scratch[r, q] = tensor[r, q]
-    for q in range(3):
-        b_lo = scratch[small, q]
-        b_hi = scratch[big, q]
-        for r in range(3):
-            if r == small:
-                tensor[r, q] = co * b_lo + si * b_hi
-            elif r == big:
-                tensor[r, q] = -si * b_lo + co * b_hi
-            else:
-                tensor[r, q] = scratch[r, q]
-    for r in range(3):
-        v_lo = eigenvectors[r, small]
-        v_hi = eigenvectors[r, big]
-        eigenvectors[r, small] = v_lo * co + v_hi * si
-        eigenvectors[r, big] = v_lo * -si + v_hi * co
+def _mix_columns(low: float, high: float, co: float, si: float) -> tuple[float, float]:
+    """Returns the (small, big) entries of a row after Tissue's column rotation."""
+    return low * co + high * si, low * -si + high * co
 
 
 @numba.njit(cache=True)
-def _jacobi(
-    tensor: FloatArray,
-    eigenvectors: FloatArray,
-    pivot_at_top: bool,
-    scratch: FloatArray,
-) -> None:
-    """Diagonalises the tensor in place; the columns of `eigenvectors` become unit
-    eigenvectors.
+def _mix_rows(low: float, high: float, co: float, si: float) -> tuple[float, float]:
+    """Returns the (small, big) entries of a column after Tissue's row rotation."""
+    return co * low + si * high, -si * low + co * high
+
+
+@numba.njit(cache=True)
+def _rotate(
+    tensor: Matrix3, eigenvectors: Matrix3, big: int, small: int
+) -> tuple[Matrix3, Matrix3]:
+    """Applies Tissue's Jacobi rotation in the (small, big) plane.
+
+    The rotation sign is lost as in Tissue (KNOWN_ISSUES T4). Columns rotate first,
+    then rows; skipping Tissue's exact products with 0 and 1 leaves the result
+    bit-identical. Unrolled per plane on scalars, since this loop dominates the
+    stress update.
+    """
+    if abs(tensor[big][big] - tensor[small][small]) < _EIGEN_TOLERANCE:
+        si = _C45
+        co = _C45
+    else:
+        tan = (2 * tensor[big][small]) / (tensor[small][small] - tensor[big][big])
+        tan = 1 / np.sqrt(1 + tan * tan)
+        si = _C45 * np.sqrt(1 - tan) if tan < 1 else _C45 * np.sqrt(tan - 1)
+        co = _C45 * np.sqrt(1 + tan)
+    (a00, a01, a02), (a10, a11, a12), (a20, a21, a22) = tensor
+    (v00, v01, v02), (v10, v11, v12), (v20, v21, v22) = eigenvectors
+    if big == 1:  # small == 0
+        a00, a01 = _mix_columns(a00, a01, co, si)
+        a10, a11 = _mix_columns(a10, a11, co, si)
+        a20, a21 = _mix_columns(a20, a21, co, si)
+        a00, a10 = _mix_rows(a00, a10, co, si)
+        a01, a11 = _mix_rows(a01, a11, co, si)
+        a02, a12 = _mix_rows(a02, a12, co, si)
+        v00, v01 = _mix_columns(v00, v01, co, si)
+        v10, v11 = _mix_columns(v10, v11, co, si)
+        v20, v21 = _mix_columns(v20, v21, co, si)
+    elif small == 0:  # big == 2
+        a00, a02 = _mix_columns(a00, a02, co, si)
+        a10, a12 = _mix_columns(a10, a12, co, si)
+        a20, a22 = _mix_columns(a20, a22, co, si)
+        a00, a20 = _mix_rows(a00, a20, co, si)
+        a01, a21 = _mix_rows(a01, a21, co, si)
+        a02, a22 = _mix_rows(a02, a22, co, si)
+        v00, v02 = _mix_columns(v00, v02, co, si)
+        v10, v12 = _mix_columns(v10, v12, co, si)
+        v20, v22 = _mix_columns(v20, v22, co, si)
+    else:  # small == 1, big == 2
+        a01, a02 = _mix_columns(a01, a02, co, si)
+        a11, a12 = _mix_columns(a11, a12, co, si)
+        a21, a22 = _mix_columns(a21, a22, co, si)
+        a10, a20 = _mix_rows(a10, a20, co, si)
+        a11, a21 = _mix_rows(a11, a21, co, si)
+        a12, a22 = _mix_rows(a12, a22, co, si)
+        v01, v02 = _mix_columns(v01, v02, co, si)
+        v11, v12 = _mix_columns(v11, v12, co, si)
+        v21, v22 = _mix_columns(v21, v22, co, si)
+    return (
+        ((a00, a01, a02), (a10, a11, a12), (a20, a21, a22)),
+        ((v00, v01, v02), (v10, v11, v12), (v20, v21, v22)),
+    )
+
+
+@numba.njit(cache=True)
+def _jacobi(tensor: Matrix3, pivot_at_top: bool) -> tuple[Matrix3, Matrix3]:
+    """Returns the diagonalised tensor and its unit eigenvectors (as columns).
 
     `pivot_at_top` reproduces the stress loop, which tests the previous pivot and so
     always applies one extra rotation (KNOWN_ISSUES T4).
     """
-    for r in range(3):
-        for q in range(3):
-            eigenvectors[r, q] = 1.0 if r == q else 0.0
+    eigenvectors: Matrix3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
     if pivot_at_top:
         pivot = 1.0
         while pivot > _EIGEN_TOLERANCE:
             pivot, big, small = _pick_pivot(tensor)
-            _rotate(tensor, eigenvectors, big, small, scratch)
+            tensor, eigenvectors = _rotate(tensor, eigenvectors, big, small)
     else:
         pivot, big, small = _pick_pivot(tensor)
         while pivot > _EIGEN_TOLERANCE:
-            _rotate(tensor, eigenvectors, big, small, scratch)
+            tensor, eigenvectors = _rotate(tensor, eigenvectors, big, small)
             pivot, big, small = _pick_pivot(tensor)
-    for q in range(3):
-        length = norm((eigenvectors[0, q], eigenvectors[1, q], eigenvectors[2, q]))
-        if length > 0:
-            for r in range(3):
-                eigenvectors[r, q] /= length
+    return tensor, _normalise_columns(eigenvectors)
+
+
+@numba.njit(cache=True)
+def _normalise_columns(matrix: Matrix3) -> Matrix3:
+    """Divides each non-zero column by its length."""
+    c0 = _normalise(_column(matrix, 0))
+    c1 = _normalise(_column(matrix, 1))
+    c2 = _normalise(_column(matrix, 2))
+    return ((c0[0], c1[0], c2[0]), (c0[1], c1[1], c2[1]), (c0[2], c1[2], c2[2]))
+
+
+@numba.njit(cache=True)
+def _normalise(vector: Vector) -> Vector:
+    """Returns the vector divided by its length, or unchanged if zero."""
+    length = norm(vector)
+    return divide(vector, length) if length > 0 else vector
