@@ -11,8 +11,8 @@ tissue-lite reproduces Tissue e74e457 as-is by default. Status: **Resolved** (ti
 | S3 | Stage 3 writes `ak2W` instead of `ak3W`. | `rungeKutta.cc:486` | Wrong tableau for wall variables; latent, as wall derivatives are always 0. Not ported (walls are not integrated). | Won't fix: not ported |
 | S4 ✔ | Feedback (fibres, MTs, growth) is explicit Euler outside the error control. | `updateReactions` | First order in time; results depend on the step history. | Kept: every solver feeds back by explicit Euler; `QuasiStatic` only decouples it from the Cash–Karp step history (N1) |
 | S5 ✔ | Stage derivatives see copies of the cell variables, but the top-of-loop call writes the real state. | `derivs` vs `rkck` | Diagnostics (velocity, angles, var 20, var 25) describe the state at the start of the step. The velocity gates in `update` therefore read the velocity of the previous accepted state, one step stale. | Fixed by `CashKarp(fidelity=False)` |
-| S6 ✔ | With more than two frames, t_end is printed twice (just before and after the last step); `tissue.pvd` lists only n frames. | print-time clipping | n + 1 VTU frames for n > 2. | Open |
-| S7 | No convergence criterion. | solver file `t_end` | "Equilibrium" is assumed at a fixed time. | Open |
+| S6 ✔ | With more than two frames, t_end is printed twice (just before and after the last step); `tissue.pvd` lists only n frames. | print-time clipping | n + 1 VTU frames for n > 2. | Fixed for non-fidelity steppers (`QuasiStatic`, `Implicit`, `CashKarp(fidelity=False)`) |
+| S7 | No convergence criterion. | solver file `t_end` | "Equilibrium" is assumed at a fixed time. | Fixed by `simulate(steady_tolerance=…)`, off by default |
 
 The solver replacement (quasi-static Newton, compared against an implicit stiff integrator) is tracked as a separate issue.
 
@@ -84,7 +84,7 @@ Both apply one feedback update of length `step` (default 0.1) and then a mechani
 | N3 | Trial evaluations are pure functions of the positions (`ModelState.compute_trial_forces`): the random fibre fallback (T1) restarts from the current seed on every call and the diagnostics go to a scratch copy. | A cell whose microtubule axis vanishes gets the same pseudo-random fibre direction in every evaluation of a step; the real stream advances only in the frame loop's own evaluation. | By design |
 | N4 | `QuasiStatic` skips the mechanical transient: every printed frame is an equilibrium of the current feedback state, and the velocity diagnostic (var 22) is the residual force, i.e. the drift of N2 or 0. | Velocity gates (300) are always open, as they are in practice in Tissue (F3). Shapes differ from Tissue's where its feedback acted during the transient (issue #2). The inflation from a flat rest state is a snap-through that costs the first step 60–200 Newton iterations; later steps take 1–5. | By design |
 | N5 | The Jacobian pattern ignores Tissue's sliver branch (T3). | More Newton iterations on a sliver, never a wrong equilibrium: the residual is exact. | Open (follows T3) |
-| N6 | S1, S2 and S4 do not apply; S6 (t_end printed twice for n_frames > 2) and S7 still do, since the frame loop is shared. | Runs to t_end; the S6 sliver step to t_end costs one residual evaluation once converged. | Open (follows S6, S7) |
+| N6 | S1 and S2 do not apply and S4 remains as N1; the frame loop is shared, so S6 and S7 applied too. | Exactly `n_frames` frames and no sliver step (S6 fixed); runs to t_end unless `steady_tolerance` is set (S7). | Fixed |
 
 ## tissue-lite limitations (not Tissue quirks)
 

@@ -150,8 +150,8 @@ def format_walls(tissue: Tissue) -> str:
 def format_pvd(n_frames: int) -> str:
     """Returns Tissue's `tissue.pvd`, listing `n_frames` frames up front.
 
-    Each frame has a cells and a walls dataset. For `n_frames > 2` the run writes one
-    more frame than is listed (KNOWN_ISSUES S6).
+    Each frame has a cells and a walls dataset. For `n_frames > 2` a run with a
+    fidelity stepper writes one more frame than is listed (KNOWN_ISSUES S6).
     """
     lines = ['<?xml version="1.0"?> ', '<VTKFile type="Collection" version="0.1" > ']
     lines.append("<Collection> ")

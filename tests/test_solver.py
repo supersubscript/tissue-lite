@@ -16,6 +16,7 @@ from conftest import (
 
 from tissue_lite.legacy.solver_file import read_solver_file
 from tissue_lite.solvers.cash_karp import CashKarp
+from tissue_lite.solvers.quasi_static import QuasiStatic
 from tissue_lite.solvers.simulate import integrate, prerun_and_simulate, simulate
 
 
@@ -119,6 +120,68 @@ def test_cash_karp_fidelity_switch(fidelity: bool) -> None:
     # S5: the velocity gates read the previous state unless the fix re-evaluates it
     # (re-normalising the microtubule axis can change the last bit).
     assert all(fresh) != fidelity
+
+
+@pytest.mark.parametrize(("fidelity", "num_frames"), [(True, 6), (False, 5)])
+def test_fidelity_decides_frame_schedule(fidelity: bool, num_frames: int) -> None:
+    case = CASES_DIR / "sweep_pre"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=0.04,
+        n_frames=5,
+        solver=CashKarp(fidelity=fidelity),
+    )
+    expected = np.linspace(0.0, 0.04, 5)
+    np.testing.assert_allclose(result.times[:5], expected, atol=1e-8)
+    assert len(result.frames) == num_frames
+
+
+@pytest.mark.parametrize(("tolerance", "stops"), [(1e9, True), (1e-9, False)])
+def test_steady_tolerance_ends_run(tolerance: float, stops: bool) -> None:
+    case = CASES_DIR / "sweep_pre"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=0.04,
+        n_frames=2,
+        solver=CashKarp(),
+        steady_tolerance=tolerance,
+    )
+    assert (result.times[-1] < 0.04) == stops
+    assert (result.accepted_steps + result.rejected_steps == 1) == stops
+
+
+@pytest.mark.parametrize(
+    ("n_frames", "expected"),
+    [
+        (1, [2.5]),
+        (2, [0.0, 2.5]),
+        (3, [0.0, 1.25, 2.5]),
+        (4, [0.0, 2.5 / 3, 5 / 3, 2.5]),
+    ],
+)
+def test_quasi_static_prints_n_frames(n_frames: int, expected: list[float]) -> None:
+    case = CASES_DIR / "sweep_pre"
+    result = simulate(
+        read_case_model(case).model,
+        read_case_tissue(case),
+        t_end=2.5,
+        n_frames=n_frames,
+        solver=QuasiStatic(step=1.0),
+    )
+    np.testing.assert_allclose(result.times, expected, atol=1e-8)
+
+
+def test_simulate_rejects_non_positive_steady_tolerance() -> None:
+    case = CASES_DIR / "sweep_pre"
+    with pytest.raises(ValueError, match="steady_tolerance"):
+        simulate(
+            read_case_model(case).model,
+            read_case_tissue(case),
+            t_end=0.01,
+            steady_tolerance=0.0,
+        )
 
 
 def test_cash_karp_without_fidelity_keeps_volume_change_per_step() -> None:
