@@ -3,7 +3,8 @@
 Ports `CenterTriangulation::WallGrowth::StrainTRBS` (double rest lengths) from Tissue
 e74e457, including its hard-coded inputs: the growth axis is the microtubule axis
 and the two compared values are `growth_signal` and `stress_max` (KNOWN_ISSUES
-G1-G3). Its velocity threshold is read but never used by Tissue.
+G1-G3). Its velocity threshold is read but never used by Tissue; `StrainGrowth`
+can apply it (G1).
 """
 
 from dataclasses import dataclass
@@ -35,11 +36,13 @@ class StrainGrowth:
     """Extends rest lengths along and across the growth axis above a threshold.
 
     `threshold` is compared with `growth_signal` (a strain) and `stress_max` (a stress,
-    KNOWN_ISSUES G2); growth runs every step (G1).
+    KNOWN_ISSUES G2). Without `velocity_threshold` growth runs every step, as in
+    Tissue (G1); with it, only in cells slower than it.
     """
 
     rate: float
     threshold: float
+    velocity_threshold: float | None = None
 
 
 @numba.njit(cache=True)
@@ -51,6 +54,7 @@ def update_growth(
     h: float,
     rate: float,
     threshold: float,
+    velocity_threshold: float,
 ) -> None:
     """Applies one explicit growth update of length h to the rest lengths in `mesh`.
 
@@ -59,13 +63,16 @@ def update_growth(
     `1 + rate * h * (growth_signal - threshold)` where the signal exceeds `threshold`,
     the across ones likewise with `stress_max` (KNOWN_ISSUES G2). Writes `mesh.spokes`
     and `mesh.wall_extensions` in place, and the branch count into `cells.growth_count`
-    (G3). `h` is the solver's trial step (S2).
+    (G3). Cells not slower than `velocity_threshold` do not grow (inf: none, as
+    Tissue, G1). `h` is the solver's trial step (S2).
 
     Raises:
         ZeroDivisionError: If a cell's microtubule axis is zero or normal to a triangle.
     """
     for c in range(mesh.offsets.shape[0] - 1):
         cells.growth_count[c] = 0
+        if not cells.velocity[c] < velocity_threshold:
+            continue
         signal = cells.growth_signal[c]
         stress = cells.stress_max[c]
         growth_axis = (
