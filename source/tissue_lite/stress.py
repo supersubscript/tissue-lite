@@ -382,7 +382,12 @@ def _rank_principal_axes(diagonal: Matrix3, cyclic: bool) -> tuple[int, int, int
 
 @numba.njit(cache=True)
 def _pick_pivot(tensor: Matrix3) -> tuple[float, int, int]:
-    """Returns the largest off-diagonal magnitude and its (row, column), row > col."""
+    """Returns the largest off-diagonal magnitude below the diagonal and its indices.
+
+    Returns:
+        (pivot, big, small): the magnitude, its row `big` and column `small`;
+        `big > small`, and the pair names the plane the next rotation acts in.
+    """
     pivot, big, small = abs(tensor[1][0]), 1, 0
     if abs(tensor[2][0]) > pivot:
         pivot, big, small = abs(tensor[2][0]), 2, 0
@@ -393,13 +398,21 @@ def _pick_pivot(tensor: Matrix3) -> tuple[float, int, int]:
 
 @numba.njit(cache=True)
 def _mix_columns(low: float, high: float, co: float, si: float) -> tuple[float, float]:
-    """Returns the (small, big) entries of a row after Tissue's column rotation."""
+    """Rotates one row's pair of entries in columns (small, big).
+
+    `low` and `high` are the entries in columns `small` and `big`; `co` and `si`
+    are the rotation's cosine and sine. Returns the new (low, high).
+    """
     return low * co + high * si, low * -si + high * co
 
 
 @numba.njit(cache=True)
 def _mix_rows(low: float, high: float, co: float, si: float) -> tuple[float, float]:
-    """Returns the (small, big) entries of a column after Tissue's row rotation."""
+    """Rotates one column's pair of entries in rows (small, big).
+
+    `low` and `high` are the entries in rows `small` and `big`; `co` and `si` are
+    the rotation's cosine and sine. Returns the new (low, high).
+    """
     return co * low + si * high, -si * low + co * high
 
 
@@ -408,6 +421,11 @@ def _rotate(
     tensor: Matrix3, eigenvectors: Matrix3, big: int, small: int
 ) -> tuple[Matrix3, Matrix3]:
     """Applies Tissue's Jacobi rotation in the (small, big) plane.
+
+    `tensor` is the symmetric 3×3 matrix being diagonalised and `eigenvectors`
+    the accumulated rotations (eigenvectors as columns); `big > small` are the
+    plane's axis indices from `_pick_pivot`. `aij` and `vij` are the row i, column
+    j entries of the two matrices. Returns both matrices after the rotation.
 
     The rotation sign is lost as in Tissue (KNOWN_ISSUES T4). Columns rotate first,
     then rows; skipping Tissue's exact products with 0 and 1 leaves the result

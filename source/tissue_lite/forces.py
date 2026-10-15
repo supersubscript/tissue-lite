@@ -6,6 +6,16 @@ triangle contributes Delingette's biquadratic springs for the transverse (matrix
 material plus the fibre stress pushed onto the nodes through the shape vectors.
 Every expression keeps Tissue's evaluation order so that results are
 bit-identical; do not simplify them algebraically.
+
+Index names in the kernels:
+
+| Name | Meaning |
+|---|---|
+| `c` | cell (row of `centres` and of the `CellState` arrays) |
+| `t` | centre triangle, `mesh.offsets[c] <= t < mesh.offsets[c + 1]` |
+| `a`, `b` | the triangle's two wall vertices (`mesh.vertex_a[t]`, `mesh.vertex_b[t]`) |
+| `node` | 0 = cell centre, 1 = vertex a, 2 = vertex b |
+| `d` | spatial component x, y, z |
 """
 
 import numba
@@ -61,10 +71,20 @@ def compute_forces(
     vertex_forces: FloatArray,
     centre_forces: FloatArray,
 ) -> None:
-    """Adds the TRBS-MT forces, then the pressure forces, to `vertex_forces` (V, 3) and
-    `centre_forces` (C, 3).
+    """Adds the TRBS-MT forces, then the pressure forces, to vertex and centre forces.
 
-    Both arrays are accumulated into, not zeroed. Reads `cells.young_longitudinal`,
+    Args:
+        mesh: Centre triangulation; T triangles over C cells.
+        centres: Cell centre positions, (C, 3).
+        vertices: Wall vertex positions, (V, 3).
+        cells: Per-cell state; see below for the fields read and written.
+        material: Membrane scalars.
+        rand_state: glibc `rand` state, advanced by each random fibre draw.
+        pressure: Current, ramped turgor pressure.
+        vertex_forces: (V, 3), accumulated into, not zeroed.
+        centre_forces: (C, 3), accumulated into, not zeroed.
+
+    Reads `cells.young_longitudinal`,
     `concentration` and `microtubule`; a vanishing fibre direction consumes `rand_state`
     (KNOWN_ISSUES T1). Without softening, also writes each cell's transverse modulus
     into `cells.young_transverse` (Tissue's slot 20, T7); with softening it is left
@@ -140,9 +160,18 @@ def _compute_triangle_forces(
     pressure_forces: FloatArray,
     kinds: Int8Array,
 ) -> None:
-    """Writes each triangle's summed spring and fibre forces on its centre, vertex a
-    and vertex b (T, 3, 3), its pressure force (T, 3) and its kind; triangles whose
-    fibre direction needs a random draw are left to the caller."""
+    """Evaluates every triangle independently, one cell per thread.
+
+    Writes, per triangle t:
+    - `node_forces[t, node, d]`, (T, 3, 3): spring + fibre force on each node,
+      for `_NORMAL` triangles only;
+    - `pressure_forces[t, d]`, (T, 3): the pressure force, the same on all three
+      nodes;
+    - `kinds[t]`, (T,): `_NORMAL`; `_SLIVER_TRIANGLE` (forces replaced by the sliver
+      fix); or `_RANDOM_FIBRE` (the fibre needs a random draw, so the caller
+      evaluates it in order).
+    Also writes `cells.young_transverse` unless softening (see `compute_forces`).
+    """
     # Numba drops writes through a NamedTuple field inside `prange`; write via a local.
     young_transverse = cells.young_transverse
     for c in numba.prange(mesh.offsets.shape[0] - 1):
@@ -201,8 +230,12 @@ def _compute_random_fibre_triangle(
     t: int,
     target: FloatArray,
 ) -> int:
-    """Evaluates a triangle whose fibre direction is a random draw (KNOWN_ISSUES
-    T1), drawing even for a sliver as Tissue does; returns its kind."""
+    """Evaluates triangle t of cell c, whose fibre direction is a random draw (T1).
+
+    Draws from `rand_state` even when t is a sliver, as Tissue does, so the draws
+    stay in sequence. Writes the (3, 3) node forces into `target` unless t is a
+    sliver; returns `_NORMAL` or `_SLIVER_TRIANGLE`.
+    """
     young_l, young_t = compute_moduli(
         cells.young_longitudinal[c], cells.concentration[c], material
     )
@@ -247,8 +280,11 @@ def _write_node_forces(
     fibre: tuple[float, float],
     target: FloatArray,
 ) -> None:
-    """Writes spring + fibre force on the centre, vertex a and vertex b (rows of the
-    (3, 3) target)."""
+    """Writes `target[node, d]` = spring + fibre force on node (0 = centre, 1 =
+    vertex a, 2 = vertex b), component d.
+
+    `fibre` is the unit fibre direction in the triangle's local (x, y) frame.
+    """
     # Delingette's springs of the transverse material.
     tensile, angular = _compute_spring_stiffness(
         cosines, rest_area, lame.lambda_t, lame.mu_t
