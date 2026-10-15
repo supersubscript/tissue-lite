@@ -241,8 +241,8 @@ class ModelState:
         """Applies the per-step updates of length h in Tissue's order.
 
         Evaluates at the current `positions` and writes `tissue.cells` and the mesh rest
-        lengths in place. The solver passes the trial step, not the accepted one
-        (KNOWN_ISSUES S2).
+        lengths in place. Cash–Karp passes the trial step, not the accepted one
+        (KNOWN_ISSUES S2), unless `CashKarp(fidelity=False)`.
         """
         model, tissue = self.model, self.tissue
         cells = tissue.cells
