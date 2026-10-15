@@ -20,13 +20,13 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 
 | # | Issue | Tissue source | Effect | Status |
 |---|---|---|---|---|
-| T1 | When the MT vector in the rest frame is shorter than 1e-4, a random direction from `rand()` is used, inside `derivs`. | `:4143`, `:5047` | The right-hand side is not a function of the state; breaks RK error control. Reproducible only because glibc `rand()` is seeded with 1 (ported in `rand.py`). | Open |
-| T2 | The 1e-4 threshold is applied to `adj(F)·a`, without 1/det F, and to the unnormalised in-plane MT. | `:4143` | The fallback triggers depending on deformation and on how far the MT points out of plane. | Open |
-| T3 | Sliver-triangle "fix" adds the accumulated centre and vertex derivatives onto all three nodes; only angles near 0° are detected, not near 180°. | `:4507–4535` | Spurious forces on degenerate triangles. Not applied in `update`. | Open |
+| T1 | When the MT vector in the rest frame is shorter than 1e-4, a random direction from `rand()` is used, inside `derivs`. | `:4143`, `:5047` | The right-hand side is not a function of the state; breaks RK error control. Reproducible only because glibc `rand()` is seeded with 1 (ported in `rand.py`). | Fixed by `TRBSMembrane(fidelity=False)`: no fibre term where the MT is normal to the triangle |
+| T2 | The 1e-4 threshold is applied to `adj(F)·a`, without 1/det F, and to the unnormalised in-plane MT. | `:4143` | The fallback triggers depending on deformation and on how far the MT points out of plane. | Fixed by `TRBSMembrane(fidelity=False)`: threshold on the unit MT's in-plane length |
+| T3 | Sliver-triangle "fix" adds the accumulated centre and vertex derivatives onto all three nodes; only angles near 0° are detected, not near 180°. | `:4507–4535` | Spurious forces on degenerate triangles. Not applied in `update`. | Fixed by `TRBSMembrane(fidelity=False)`: the triangle's own forces |
 | T4 | The stress Jacobi eigen loop applies one extra rotation (pivot recomputed at the loop top) and loses the rotation sign; the strain loop does not. | `:5529` | Eigenvector signs and, rarely, the selected axis differ from `numpy.linalg.eigh`. | Won't fix: signs are arbitrary (the MT update re-aligns them), and another axis is picked only between eigenvalues within 1e-6, where either is principal |
 | T5 | Principal stress is selected by \|value\| here but signed in the (dead) neighbour branch. | `:5606` vs `:6365` | Compressive strain can be reported as the maximum. | Kept: needs a modelling decision (signed or \|value\| ranking) |
 | T6 | Update's isotropic stress uses SVK λT, μT while forces come from biquadratic springs. | `:4275` | — | Not an issue: Delingette's springs are SVK (forces agree to 1e-16), and forces and stress share `compute_anisotropic_stress` |
-| T7 | Var 20 holds Y_T in `derivs` (MF=1 only) and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is Y_T unless the model softens. | index layout | `CellState.young_transverse` mirrors the slot; `energy_isotropic` and `energy_anisotropic` keep the energies. | Open |
+| T7 | Var 20 holds Y_T in `derivs` (MF=1 only) and the energy in `update` (isotropic, then overwritten by anisotropic). Printed frames call `derivs` last, so VTU var 20 is Y_T unless the model softens. | index layout | `CellState.young_transverse` mirrors the slot; `energy_isotropic` and `energy_anisotropic` keep the energies. | Fixed by `TRBSMembrane(fidelity=False)`: `young_transverse` always holds Y_T |
 | T8 | Var 19 ("area ratio" in model files) is the total rest area. | `update` | Mislabelled output. | Resolved: `CellState.rest_area` |
 | T9 | In the growth layout the second stress axis (31–34) overwrites the normal (32–34); the perpendicular strain (26–29) is unnormalised and its slot 29 holds e2. | index layout | Normals are lost in growth-layout files; `CellState.normal` keeps them and `SlotLayout(second_axes=True)` reproduces the overwrite on output. | Resolved: `CellState.normal`; the overwrite is kept on output |
 | T10 | Var 21 ("MT stress") is the von Mises stress √(s1² + s2² − s1 s2). | `update` | Mislabelled output. | Resolved: `CellState.von_mises_stress` |
@@ -38,13 +38,13 @@ The solver replacement (quasi-static Newton, compared against an implicit stiff 
 |---|---|---|---|---|
 | C1 ✔ | K and n are read from p9 and p10, not from the "hill parameters" p11 and p12. | `:3520` | `celly/test_auxin_decay` sets p9 = p10 = 0, so K = 0, n = 0 and the factor is 1 − 0^0/(0^0 + c^0) = 1/2 everywhere: both moduli halved, independent of auxin. The intended (0.005, 2) are ignored. | Resolved in the API (`ConcentrationSoftening` takes K and n); the reader keeps p9, p10 and warns when p11, p12 differ |
 | C2 | p9 also selects the TETA branch when 1, and p10 == 1 also means double rest lengths. | constructor | K = 1 or n = 1 cannot be expressed without side effects (the legacy reader rejects p9 = 1). | Resolved: the reader rejects p9 = 1 |
-| C3 | `derivs` does not write Y_T (var 20) for MF=10. | `:3540` | Var 20 keeps the energy from the last update. | Open |
+| C3 | `derivs` does not write Y_T (var 20) for MF=10. | `:3540` | Var 20 keeps the energy from the last update. | Fixed by `TRBSMembrane(fidelity=False)` |
 
 ## Pressure (`Pressure`, Tissue `mechanical.cc`)
 
 | # | Issue | Tissue source | Effect | Status |
 |---|---|---|---|---|
-| P1 | Each triangle node gets P·A/2; the consistent share is P·A/3. | `mechanical.cc:2454` | Effective turgor is 1.5 P; shapes unchanged, fitted moduli 1.5× off. | Open |
+| P1 | Each triangle node gets P·A/2; the consistent share is P·A/3. | `mechanical.cc:2454` | Effective turgor is 1.5 P; shapes unchanged, fitted moduli 1.5× off. | Fixed by `Pressure(fidelity=False)` |
 | P2 ✔ | The "linear ramp-up" parameter is a ramp *time*: the factor grows by h/p2 per step. | `update` | p2 = 0.001 reaches full pressure on the first step (h = 5e-3), i.e. no ramp. | Resolved: `Pressure.ramp_time` |
 
 ## Feedback (`feedback.py`, Tissue `fiberModel.cc`, `directionUpdate.cc`)
@@ -83,7 +83,7 @@ Both apply one feedback update of length `step` (default 0.1) and then a mechani
 | N2 | A boundary that leaves rigid motions free (`fixed_axes` shorter than three) lets the pressure on its non-planar edge push the tissue rigidly: translation along each free axis and rotation about a single fixed one. Cash–Karp and `Implicit` integrate the drift (sweep: 1e-3 per time unit, `auxin_softening`: 0.9 per time unit); `QuasiStatic` discards it and holds the tissue in place. | Positions differ by a rigid motion; shapes and stresses do not, except that the fibres are fixed in space, so a rotation drift re-orients the tissue against them. | By design |
 | N3 | Trial evaluations are pure functions of the positions (`ModelState.compute_trial_forces`): the random fibre fallback (T1) restarts from the current seed on every call and the diagnostics go to a scratch copy. | A cell whose microtubule axis vanishes gets the same pseudo-random fibre direction in every evaluation of a step; the real stream advances only in the frame loop's own evaluation. | By design |
 | N4 | `QuasiStatic` skips the mechanical transient: every printed frame is an equilibrium of the current feedback state, and the velocity diagnostic (var 22) is the residual force, i.e. the drift of N2 or 0. | Velocity gates (300) are always open, as they are in practice in Tissue (F3). Shapes differ from Tissue's where its feedback acted during the transient (issue #2). The inflation from a flat rest state is a snap-through that costs the first step 60–200 Newton iterations; later steps take 1–5. | By design |
-| N5 | The Jacobian pattern ignores Tissue's sliver branch (T3). | More Newton iterations on a sliver, never a wrong equilibrium: the residual is exact. | Open (follows T3) |
+| N5 | The Jacobian pattern ignores Tissue's sliver branch (T3). | More Newton iterations on a sliver, never a wrong equilibrium: the residual is exact. | Fixed by `TRBSMembrane(fidelity=False)` (no sliver branch) |
 | N6 | S1 and S2 do not apply and S4 remains as N1; the frame loop is shared, so S6 and S7 applied too. | Exactly `n_frames` frames and no sliver step (S6 fixed); runs to t_end unless `steady_tolerance` is set (S7). | Fixed |
 
 ## tissue-lite limitations (not Tissue quirks)

@@ -63,8 +63,9 @@ def update_cell_stress(
     normal, both principal axes of stress and strain (ranked by |value|, KNOWN_ISSUES
     T5; Jacobi signs as in Tissue, T4), their anisotropies, the von Mises stress (T10),
     the total rest area (T8) and the energies, and normalises `cells.microtubule`, as
-    Tissue's `update` does. The anisotropic energy also goes into `young_transverse`
-    (Tissue's slot 20, T7). A vanishing fibre direction consumes `rand_state` (T1).
+    Tissue's `update` does. With `material.fidelity`, the anisotropic energy also goes
+    into `young_transverse` (Tissue's slot 20, T7). A vanishing fibre direction
+    consumes `rand_state` (T1).
 
     Raises:
         ZeroDivisionError: If a triangle is degenerate.
@@ -94,7 +95,12 @@ def update_cell_stress(
             )
             area = compute_triangle_area(triangle.lengths)
             fibre = compute_fibre_direction(
-                gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state
+                gradient,
+                triangle.x_axis,
+                triangle.y_axis,
+                microtubule,
+                rand_state,
+                material.fidelity,
             )
             strain = compute_green_strain(gradient)
             left_cauchy_green = multiply(gradient, transpose(gradient))
@@ -151,7 +157,8 @@ def update_cell_stress(
         cells.rest_area[c] = total_rest_area
         cells.energy_isotropic[c] = energy_iso / total_rest_area
         cells.energy_anisotropic[c] = energy_aniso / total_rest_area
-        cells.young_transverse[c] = energy_aniso / total_rest_area
+        if material.fidelity:
+            cells.young_transverse[c] = energy_aniso / total_rest_area
 
 
 @numba.njit(cache=True)

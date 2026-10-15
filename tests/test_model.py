@@ -1,11 +1,13 @@
 """Tests for the model definition, TOML IO and the per-call evaluation."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 from conftest import CASES_DIR, MESHES_DIR, MODELS, case_state, read_case_tissue
 
+from tissue_lite.arrays import FloatArray
 from tissue_lite.legacy.init_file import read_init
 from tissue_lite.legacy.model_file import read_model_file
 from tissue_lite.material import Boundary, Pressure, TRBSMembrane
@@ -107,3 +109,71 @@ def test_cell_stress_after_update() -> None:
         np.linalg.norm(cells.stress_direction, axis=1), 1.0, atol=1e-9
     )
     assert (cells.rest_area > 0).all()
+
+
+def test_membrane_fidelity_keeps_regular_forces() -> None:
+    state = case_state(CASES_DIR / "sweep_120_120")
+    model = replace(state.model, membrane=replace(state.model.membrane, fidelity=False))
+    fixed = ModelState(
+        model=model, tissue=read_case_tissue(CASES_DIR / "sweep_120_120")
+    )
+    # No sliver or vanishing fibre in the case, so the forces are unchanged.
+    np.testing.assert_array_equal(fixed.compute_forces(), state.compute_forces())
+    fixed.update(1e-3)
+    membrane = model.membrane
+    cells = fixed.tissue.cells
+    np.testing.assert_allclose(  # Y_T, not the anisotropic energy (T7)
+        cells.young_transverse,
+        2 * membrane.young_matrix + membrane.young_fibre - cells.young_longitudinal,
+    )
+
+
+def test_pressure_fidelity_sets_nodal_share() -> None:
+    def compute_total_force(fidelity: bool) -> FloatArray:
+        model = MeristemModel(
+            membrane=TRBSMembrane(0.0, 0.0),
+            pressure=Pressure(1.0, 1e-3, fidelity=fidelity),
+            boundary=Boundary(fixed_axes=()),
+        )
+        state = _rest_state(model)
+        state.update(1.0)
+        return state.compute_forces().sum(0)
+
+    # P A / 3 per node adds up to P A per triangle; Tissue's P A / 2 to 1.5 P A (P1).
+    np.testing.assert_allclose(
+        compute_total_force(False), compute_total_force(True) * 2 / 3
+    )
+
+
+@pytest.mark.parametrize(("fidelity", "balanced"), [(True, False), (False, True)])
+def test_sliver_fix_breaks_force_balance(fidelity: bool, balanced: bool) -> None:
+    model = MeristemModel(
+        membrane=TRBSMembrane(120.0, 0.0, fidelity=fidelity),
+        pressure=Pressure(0.0, 0.001),
+        boundary=Boundary(fixed_axes=()),
+    )
+    state = _rest_state(model)
+    # The last triangle, so that the fix adds forces accumulated before it.
+    spokes, wall = state.mesh.spokes, state.mesh.wall_lengths[state.mesh.wall[-1]]
+    spokes[-1, 1] = spokes[-1, 0] + wall * (1 - 1e-9)  # rest angles near 0° and 180°
+    derivatives = state.compute_forces_at(state.tissue.cells, state.positions * 1.05)
+    scale = np.abs(derivatives).max()
+    assert (np.abs(derivatives.sum(0)).max() < 1e-9 * scale) == balanced
+
+
+def test_membrane_without_fidelity_writes_softened_transverse_modulus() -> None:
+    case = CASES_DIR / "auxin_softening_hill"
+    model = read_model_file(case / "model.model").model
+    membrane = replace(model.membrane, fidelity=False)
+    state = ModelState(
+        model=replace(model, membrane=membrane), tissue=read_case_tissue(case)
+    )
+    state.compute_forces()
+    cells = state.tissue.cells
+    c = cells.concentration
+    softening = 1 - c**2 / (4 + c**2)  # K = n = 2
+    unsoftened = 2 * membrane.young_matrix + membrane.young_fibre
+    np.testing.assert_allclose(
+        cells.young_transverse,
+        softening * (unsoftened - cells.young_longitudinal),
+    )

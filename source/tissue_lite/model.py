@@ -208,6 +208,7 @@ class ModelState:
             self._material,
             self.rand_state,
             self.pressure_factor * self.model.pressure.pressure,
+            2.0 if self.model.pressure.fidelity else 3.0,
             vertex_forces,
             centre_forces,
         )

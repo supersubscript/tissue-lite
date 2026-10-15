@@ -13,7 +13,15 @@ import numpy as np
 
 from tissue_lite.arrays import IntArray
 from tissue_lite.rand import glibc_rand
-from tissue_lite.triangles import Matrix2, Vector, multiply, outer, pull_back_direction
+from tissue_lite.triangles import (
+    Matrix2,
+    Vector,
+    dot,
+    multiply,
+    norm,
+    outer,
+    pull_back_direction,
+)
 
 _PI = 3.14159265
 _RANDOM_THRESHOLD = 0.0001
@@ -44,6 +52,7 @@ class Material(NamedTuple):
     soften: bool
     k_hill: float
     n_hill: float
+    fidelity: bool = True
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,9 @@ class TRBSMembrane:
     The longitudinal modulus is read from the cell state (set by `FibreStiffness`);
     the transverse one is `2 young_matrix + young_fibre - longitudinal`.
     Every triangle owns both spoke rest lengths (Tissue's p10 == 1, KNOWN_ISSUES T11).
+    With `fidelity` False, a triangle the microtubule axis is normal to has no fibre
+    term instead of a random one (T1, T2), slivers get their own forces (T3), and
+    `CellState.young_transverse` always holds the (softened) Y_T (T7, C3).
 
     Raises:
         ValueError: If a Poisson ratio is outside [0, 0.5).
@@ -63,6 +75,7 @@ class TRBSMembrane:
     poisson_longitudinal: float = 0.2
     poisson_transverse: float = 0.2
     softening: ConcentrationSoftening | None = None
+    fidelity: bool = True
 
     def __post_init__(self) -> None:
         for nu in (self.poisson_longitudinal, self.poisson_transverse):
@@ -80,6 +93,7 @@ class TRBSMembrane:
             soften=s is not None,
             k_hill=0.0 if s is None else s.k_hill,
             n_hill=0.0 if s is None else s.n_hill,
+            fidelity=self.fidelity,
         )
 
 
@@ -89,6 +103,8 @@ class Pressure:
 
     The pressure factor starts at 0 and grows by `h / ramp_time` per accepted step.
     Capped at 1, so a `ramp_time` of at most one step means no ramp (KNOWN_ISSUES P2).
+    Each node of a triangle gets `P A / 2`, as in Tissue (P1), or the consistent
+    `P A / 3` when `fidelity` is False.
 
     Raises:
         ValueError: If `ramp_time` is not positive.
@@ -96,6 +112,7 @@ class Pressure:
 
     pressure: float
     ramp_time: float
+    fidelity: bool = True
 
     def __post_init__(self) -> None:
         if self.ramp_time <= 0:
@@ -176,27 +193,43 @@ def compute_fibre_direction(
     y_axis: Vector,
     microtubule: Vector,
     rand_state: IntArray,
+    fidelity: bool,
 ) -> tuple[float, float]:
     """Returns the unit microtubule axis in the rest plane, as a 2-tuple.
 
-    `microtubule` is a global-frame vector. If its pulled-back length is below 1e-4
-    (without 1/det F, KNOWN_ISSUES T2) the axis is a random whole degree instead: one
-    draw from `rand_state`, advanced in place (T1).
+    `microtubule` is a global-frame vector. With `fidelity`, if its pulled-back length
+    is below 1e-4 (without 1/det F, KNOWN_ISSUES T2) the axis is a random whole degree
+    instead: one draw from `rand_state`, advanced in place (T1). Without, the axis is
+    (0, 0), i.e. no fibre term, when the in-plane part of the unit microtubule is
+    below 1e-4.
     """
-    found, a0, a1 = find_fibre_direction(gradient, x_axis, y_axis, microtubule)
+    found, a0, a1 = find_fibre_direction(
+        gradient, x_axis, y_axis, microtubule, fidelity
+    )
     return (a0, a1) if found else _sample_random_direction(rand_state)
 
 
 @numba.njit(cache=True)
 def find_fibre_direction(
-    gradient: Matrix2, x_axis: Vector, y_axis: Vector, microtubule: Vector
+    gradient: Matrix2,
+    x_axis: Vector,
+    y_axis: Vector,
+    microtubule: Vector,
+    fidelity: bool,
 ) -> tuple[bool, float, float]:
     """`compute_fibre_direction` without the random fallback: returns (False, 0, 0)
     where that would draw from `rand_state`, so callers can run in parallel and make
-    the draws afterwards in Tissue's order."""
+    the draws afterwards in Tissue's order. Without `fidelity` it never returns False;
+    a microtubule normal to the rest plane gives (0, 0)."""
+    if not fidelity:
+        local_x = dot(x_axis, microtubule)
+        local_y = dot(y_axis, microtubule)
+        in_plane = np.sqrt(local_x * local_x + local_y * local_y)
+        if in_plane <= _RANDOM_THRESHOLD * norm(microtubule):
+            return True, 0.0, 0.0
     a0, a1 = pull_back_direction(gradient, x_axis, y_axis, microtubule)
     measure = np.sqrt(a0 * a0 + a1 * a1)
-    if measure < _RANDOM_THRESHOLD:
+    if fidelity and measure < _RANDOM_THRESHOLD:
         return False, 0.0, 0.0
     return True, a0 / measure, a1 / measure
 
