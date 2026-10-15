@@ -6,18 +6,30 @@ triangle contributes Delingette's biquadratic springs for the transverse (matrix
 material plus the fibre stress pushed onto the nodes through the shape vectors.
 Every expression keeps Tissue's evaluation order so that results are
 bit-identical; do not simplify them algebraically.
+
+Index names in the kernels:
+
+| Name | Meaning |
+|---|---|
+| `c` | cell (row of `centres` and of the `CellState` arrays) |
+| `t` | centre triangle, `mesh.offsets[c] <= t < mesh.offsets[c + 1]` |
+| `a`, `b` | the triangle's two wall vertices (`mesh.vertex_a[t]`, `mesh.vertex_b[t]`) |
+| `node` | 0 = cell centre, 1 = vertex a, 2 = vertex b |
+| `d` | spatial component x, y, z |
 """
 
 import numba
 import numpy as np
 
-from tissue_lite.arrays import FloatArray, IntArray
+from tissue_lite.arrays import FloatArray, Int8Array, IntArray
 from tissue_lite.material import (
+    Lame,
     Material,
     compute_anisotropic_stress,
     compute_fibre_direction,
     compute_lame_parameters,
     compute_moduli,
+    find_fibre_direction,
 )
 from tissue_lite.tissue import CellState
 from tissue_lite.triangles import (
@@ -42,35 +54,132 @@ type NodeForces = tuple[Vector, Vector, Vector]  # on the centre, vertex a, vert
 _SLIVER = 0.0001
 
 
+_NORMAL = 0
+_SLIVER_TRIANGLE = 1
+_RANDOM_FIBRE = 2
+
+
 @numba.njit(cache=True)
-def compute_trbs_forces(
+def compute_forces(
     mesh: TriangleMesh,
     centres: FloatArray,
     vertices: FloatArray,
     cells: CellState,
     material: Material,
     rand_state: IntArray,
+    pressure: float,
     vertex_forces: FloatArray,
     centre_forces: FloatArray,
 ) -> None:
-    """Adds the TRBS-MT forces to `vertex_forces` (V, 3) and `centre_forces` (C, 3).
+    """Adds the TRBS-MT forces, then the pressure forces, to vertex and centre forces.
 
-    Both arrays are accumulated into, not zeroed. Reads `cells.young_longitudinal`,
+    Args:
+        mesh: Centre triangulation; T triangles over C cells.
+        centres: Cell centre positions, (C, 3).
+        vertices: Wall vertex positions, (V, 3).
+        cells: Per-cell state; see below for the fields read and written.
+        material: Membrane scalars.
+        rand_state: glibc `rand` state, advanced by each random fibre draw.
+        pressure: Current, ramped turgor pressure.
+        vertex_forces: (V, 3), accumulated into, not zeroed.
+        centre_forces: (C, 3), accumulated into, not zeroed.
+
+    Reads `cells.young_longitudinal`,
     `concentration` and `microtubule`; a vanishing fibre direction consumes `rand_state`
     (KNOWN_ISSUES T1). Without softening, also writes each cell's transverse modulus
     into `cells.young_transverse` (Tissue's slot 20, T7); with softening it is left
     alone (C3). A triangle with a rest angle whose cosine is within 1e-4 of 1 gets
-    Tissue's sliver "fix" in place of its own forces (T3).
+    Tissue's sliver "fix" in place of its own forces (T3). `pressure` is the current,
+    ramped value, applied as `pressure * area / 2` along each triangle's normal to all
+    three nodes; the consistent share would be area / 3 (P1).
+
+    The triangles are evaluated in parallel (Numba's thread count), then added up
+    in Tissue's order with the random draws and slivers handled there, so the result
+    does not depend on the thread count.
 
     Raises:
         ZeroDivisionError: If a rest triangle is degenerate (a zero or straight angle).
     """
+    num_triangles = mesh.vertex_a.shape[0]
+    node_forces = np.empty((num_triangles, 3, 3))
+    pressure_forces = np.empty((num_triangles, 3))
+    kinds = np.empty(num_triangles, dtype=np.int8)
+    _compute_triangle_forces(
+        mesh,
+        centres,
+        vertices,
+        cells,
+        material,
+        pressure,
+        node_forces,
+        pressure_forces,
+        kinds,
+    )
     for c in range(mesh.offsets.shape[0] - 1):
+        for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
+            a = mesh.vertex_a[t]
+            b = mesh.vertex_b[t]
+            if kinds[t] == _RANDOM_FIBRE:
+                kinds[t] = _compute_random_fibre_triangle(
+                    mesh,
+                    centres,
+                    vertices,
+                    cells,
+                    material,
+                    rand_state,
+                    c,
+                    t,
+                    node_forces[t],
+                )
+            if kinds[t] == _SLIVER_TRIANGLE:
+                _double_accumulated_forces(c, a, b, vertex_forces, centre_forces)
+            else:
+                for d in range(3):
+                    centre_forces[c, d] += node_forces[t, 0, d]
+                for d in range(3):
+                    vertex_forces[a, d] += node_forces[t, 1, d]
+                for d in range(3):
+                    vertex_forces[b, d] += node_forces[t, 2, d]
+    for c in range(mesh.offsets.shape[0] - 1):
+        for t in range(mesh.offsets[c], mesh.offsets[c + 1]):
+            for d in range(3):
+                centre_forces[c, d] += pressure_forces[t, d]
+                vertex_forces[mesh.vertex_a[t], d] += pressure_forces[t, d]
+                vertex_forces[mesh.vertex_b[t], d] += pressure_forces[t, d]
+
+
+@numba.njit(cache=True, parallel=True)
+def _compute_triangle_forces(
+    mesh: TriangleMesh,
+    centres: FloatArray,
+    vertices: FloatArray,
+    cells: CellState,
+    material: Material,
+    pressure: float,
+    node_forces: FloatArray,
+    pressure_forces: FloatArray,
+    kinds: Int8Array,
+) -> None:
+    """Evaluates every triangle independently, one cell per thread.
+
+    Writes, per triangle t:
+    - `node_forces[t, node, d]`, (T, 3, 3): spring + fibre force on each node,
+      for `_NORMAL` triangles only;
+    - `pressure_forces[t, d]`, (T, 3): the pressure force, the same on all three
+      nodes;
+    - `kinds[t]`, (T,): `_NORMAL`; `_SLIVER_TRIANGLE` (forces replaced by the sliver
+      fix); or `_RANDOM_FIBRE` (the fibre needs a random draw, so the caller
+      evaluates it in order).
+    Also writes `cells.young_transverse` unless softening (see `compute_forces`).
+    """
+    # Numba drops writes through a NamedTuple field inside `prange`; write via a local.
+    young_transverse = cells.young_transverse
+    for c in numba.prange(mesh.offsets.shape[0] - 1):
         young_l, young_t = compute_moduli(
             cells.young_longitudinal[c], cells.concentration[c], material
         )
         if not material.soften:
-            cells.young_transverse[c] = young_t
+            young_transverse[c] = young_t
         lame = compute_lame_parameters(young_l, young_t, material)
         microtubule = (
             cells.microtubule[c, 0],
@@ -83,33 +192,115 @@ def compute_trbs_forces(
             rest_area, shape, gradient = compute_deformation(
                 triangle.lengths, rest_lengths
             )
-            # Delingette's springs of the transverse material.
+            found, f0, f1 = find_fibre_direction(
+                gradient, triangle.x_axis, triangle.y_axis, microtubule
+            )
             cosines = _compute_rest_cosines(rest_lengths)
-            tensile, angular = _compute_spring_stiffness(
-                cosines, rest_area, lame.lambda_t, lame.mu_t
-            )
-            spring = _compute_spring_forces(triangle, rest_lengths, tensile, angular)
-            # The fibre stress, pushed onto the nodes through the shape vectors.
-            fibre = compute_fibre_direction(
-                gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state
-            )
-            stress = compute_anisotropic_stress(
-                compute_green_strain(gradient),
-                fibre,
-                lame.lambda_l - lame.lambda_t,
-                lame.mu_l - lame.mu_t,
-            )
-            fibre_forces = _compute_fibre_forces(
-                triangle, rest_area, gradient, shape, stress
-            )
-            a = mesh.vertex_a[t]
-            b = mesh.vertex_b[t]
-            if _is_sliver(cosines):
-                _double_accumulated_forces(c, a, b, vertex_forces, centre_forces)
+            if not found:
+                kinds[t] = _RANDOM_FIBRE
+            elif _is_sliver(cosines):
+                kinds[t] = _SLIVER_TRIANGLE
             else:
-                _add_node_forces(
-                    c, a, b, spring, fibre_forces, vertex_forces, centre_forces
+                kinds[t] = _NORMAL
+                _write_node_forces(
+                    triangle,
+                    rest_lengths,
+                    rest_area,
+                    shape,
+                    gradient,
+                    cosines,
+                    lame,
+                    (f0, f1),
+                    node_forces[t],
                 )
+            coeff = pressure * (compute_triangle_area(triangle.lengths) / 2)
+            for d in range(3):
+                pressure_forces[t, d] = coeff * triangle.normal[d]
+
+
+@numba.njit(cache=True)
+def _compute_random_fibre_triangle(
+    mesh: TriangleMesh,
+    centres: FloatArray,
+    vertices: FloatArray,
+    cells: CellState,
+    material: Material,
+    rand_state: IntArray,
+    c: int,
+    t: int,
+    target: FloatArray,
+) -> int:
+    """Evaluates triangle t of cell c, whose fibre direction is a random draw (T1).
+
+    Draws from `rand_state` even when t is a sliver, as Tissue does, so the draws
+    stay in sequence. Writes the (3, 3) node forces into `target` unless t is a
+    sliver; returns `_NORMAL` or `_SLIVER_TRIANGLE`.
+    """
+    young_l, young_t = compute_moduli(
+        cells.young_longitudinal[c], cells.concentration[c], material
+    )
+    lame = compute_lame_parameters(young_l, young_t, material)
+    triangle = compute_triangle_geometry(mesh, centres, vertices, c, t)
+    rest_lengths = get_rest_lengths(mesh, t)
+    rest_area, shape, gradient = compute_deformation(triangle.lengths, rest_lengths)
+    microtubule = (
+        cells.microtubule[c, 0],
+        cells.microtubule[c, 1],
+        cells.microtubule[c, 2],
+    )
+    fibre = compute_fibre_direction(
+        gradient, triangle.x_axis, triangle.y_axis, microtubule, rand_state
+    )
+    cosines = _compute_rest_cosines(rest_lengths)
+    if _is_sliver(cosines):
+        return _SLIVER_TRIANGLE
+    _write_node_forces(
+        triangle,
+        rest_lengths,
+        rest_area,
+        shape,
+        gradient,
+        cosines,
+        lame,
+        fibre,
+        target,
+    )
+    return _NORMAL
+
+
+@numba.njit(cache=True)
+def _write_node_forces(
+    triangle: TriangleGeometry,
+    rest_lengths: Vector,
+    rest_area: float,
+    shape: ShapeVectors,
+    gradient: Matrix2,
+    cosines: Vector,
+    lame: Lame,
+    fibre: tuple[float, float],
+    target: FloatArray,
+) -> None:
+    """Writes `target[node, d]` = spring + fibre force on node (0 = centre, 1 =
+    vertex a, 2 = vertex b), component d.
+
+    `fibre` is the unit fibre direction in the triangle's local (x, y) frame.
+    """
+    # Delingette's springs of the transverse material.
+    tensile, angular = _compute_spring_stiffness(
+        cosines, rest_area, lame.lambda_t, lame.mu_t
+    )
+    spring = _compute_spring_forces(triangle, rest_lengths, tensile, angular)
+    # The fibre stress, pushed onto the nodes through the shape vectors.
+    stress = compute_anisotropic_stress(
+        compute_green_strain(gradient),
+        fibre,
+        lame.lambda_l - lame.lambda_t,
+        lame.mu_l - lame.mu_t,
+    )
+    fibre_forces = _compute_fibre_forces(triangle, rest_area, gradient, shape, stress)
+    for node in range(3):
+        for d in range(3):
+            target[node, d] = spring[node][d] + fibre_forces[node][d]
 
 
 @numba.njit(cache=True)
@@ -216,28 +407,6 @@ def _compute_node_force(
 
 
 @numba.njit(cache=True)
-def _add_node_forces(
-    c: int,
-    a: int,
-    b: int,
-    spring: NodeForces,
-    fibre: NodeForces,
-    vertex_forces: FloatArray,
-    centre_forces: FloatArray,
-) -> None:
-    """Accumulates spring + fibre forces onto the centre and the two vertices."""
-    centre_forces[c, 0] += spring[0][0] + fibre[0][0]
-    centre_forces[c, 1] += spring[0][1] + fibre[0][1]
-    centre_forces[c, 2] += spring[0][2] + fibre[0][2]
-    vertex_forces[a, 0] += spring[1][0] + fibre[1][0]
-    vertex_forces[a, 1] += spring[1][1] + fibre[1][1]
-    vertex_forces[a, 2] += spring[1][2] + fibre[1][2]
-    vertex_forces[b, 0] += spring[2][0] + fibre[2][0]
-    vertex_forces[b, 1] += spring[2][1] + fibre[2][1]
-    vertex_forces[b, 2] += spring[2][2] + fibre[2][2]
-
-
-@numba.njit(cache=True)
 def _double_accumulated_forces(
     c: int, a: int, b: int, vertex_forces: FloatArray, centre_forces: FloatArray
 ) -> None:
@@ -248,29 +417,3 @@ def _double_accumulated_forces(
         centre_forces[c, d] += total
         vertex_forces[a, d] += total
         vertex_forces[b, d] += total
-
-
-@numba.njit(cache=True)
-def compute_pressure_forces(
-    mesh: TriangleMesh,
-    centres: FloatArray,
-    vertices: FloatArray,
-    pressure: float,
-    vertex_forces: FloatArray,
-    centre_forces: FloatArray,
-) -> None:
-    """Adds `pressure * area / 2` along each triangle's normal to all three nodes.
-
-    `pressure` is the current, ramped value. The consistent share would be area / 3
-    (KNOWN_ISSUES P1). Accumulates into `vertex_forces` and `centre_forces`; the normal
-    follows the cyclic vertex order of `Topology`.
-    """
-    offsets = mesh.offsets
-    for c in range(offsets.shape[0] - 1):
-        for t in range(offsets[c], offsets[c + 1]):
-            triangle = compute_triangle_geometry(mesh, centres, vertices, c, t)
-            coeff = pressure * (compute_triangle_area(triangle.lengths) / 2)
-            for d in range(3):
-                centre_forces[c, d] += coeff * triangle.normal[d]
-                vertex_forces[mesh.vertex_a[t], d] += coeff * triangle.normal[d]
-                vertex_forces[mesh.vertex_b[t], d] += coeff * triangle.normal[d]

@@ -141,13 +141,13 @@ def _compute_cash_karp_step(
     with derivatives k1; returns (new positions, error estimate).
 
     Stage derivatives see a copy of the cell state, so their side effects are
-    discarded as in Tissue.
+    discarded as in Tissue; their diagnostics are therefore skipped.
     """
     y = state.positions
     cells = state.tissue.cells
 
     def stage(trial: FloatArray) -> FloatArray:
-        return state.compute_forces_at(cells.copy(), trial)
+        return state.compute_forces_at(cells.copy(), trial, record_diagnostics=False)
 
     k2 = stage(y + _B21 * h * k1)
     k3 = stage(y + h * (_B31 * k1 + _B32 * k2))

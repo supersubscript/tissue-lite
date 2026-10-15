@@ -88,3 +88,22 @@ def test_solver_option_runs_the_quasi_static_solver(tmp_path: Path) -> None:
     assert (
         abs(final.vertices - reference.vertices).max() > 1.0
     )  # equilibrium, not t = 0.2
+
+
+def test_threads_do_not_change_result(tmp_path: Path) -> None:
+    case = CASES_DIR / "sweep_pre"
+    out = tmp_path / "final.init"
+    result = CliRunner().invoke(
+        main,
+        [
+            *_args(case),
+            "--solver",
+            "cash-karp",
+            "--threads",
+            "2",
+            "-init_output",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert out.read_text() == (case / "final.init").read_text()
