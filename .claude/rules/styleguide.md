@@ -29,7 +29,7 @@ Path-scoped rules in `.claude/rules/` load automatically when matching files are
 | Numerics, Numba kernels | `numerics.md` |
 
 # Non-negotiables (always applicable)
-- Logging → stdlib `logging` with a module-level logger (`logger = logging.getLogger(__name__)`). No `print` in library code.
+- Logging → `loguru`: `from loguru import logger`, with `{}` placeholders (`logger.info("plant {}", plant)`). No stdlib `logging`; no `print` in library code.
 - Imports → absolute only. Import from the concrete module path.
 - Types → frozen dataclasses for records and parameters; mutable simulation state (`Tissue`, `ModelState`) is the exception. `Protocol` for structural interfaces; `TypedDict` only for narrow I/O shapes.
 - Arrays → NumPy, typed with the aliases in `tissue_lite.arrays` (`FloatArray`, `IntArray`, `BoolArray`). Per-cell state is a named `CellState` field; Tissue's slot numbers appear only in `tissue_lite.legacy.slots`, never as literal indices.

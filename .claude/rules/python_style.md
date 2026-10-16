@@ -94,7 +94,7 @@ Also:
 - **DRY where it reduces complexity** — three similar lines are fine, the same block across modules is not.
 
 # Project idioms — always
-- Logging → `import logging; logger = logging.getLogger(__name__)`. `print` is forbidden in library code.
+- Logging → `from loguru import logger`, with `{}` placeholders (`logger.info("plant {}", plant)`). No stdlib `logging`; `print` is forbidden in library code.
 - Imports → absolute, from the concrete module path.
 - Data models → frozen dataclasses; `Protocol` for structural interfaces; `TypedDict` only for narrow I/O shapes.
 - Legacy file formats (`.init`, `.model`, solver files) are parsed in `tissue` and `legacy`; parsers raise `ValueError` on anything outside the supported subset.
