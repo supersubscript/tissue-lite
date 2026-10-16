@@ -11,6 +11,19 @@ New symbols should follow this naming scheme. Do not rename existing non-complia
 ## Functions
 Use descriptive function prefixes that communicate the operation being performed. Prefer specific verbs over generic names such as `process_`, `handle_`, or `do_`.
 
+Name a function by what it returns or does, not by the method it uses.
+
+```python
+# Bad: names the method
+def _compute_fwhm(positions, profile): ...
+def _compute_full_width_at_half_maximum(positions, profile): ...
+def find_junctions_with_kdtree(junctions): ...
+
+# Good: names the result; the method goes in the docstring
+def _compute_wall_width(positions, profile): ...
+def find_close_junctions(junctions): ...
+```
+
 ### Retrieval, search, derivation and extraction
 
 - `get_` — retrieve a value or object when its location/key/relationship is known, or when the derivation is trivial.
