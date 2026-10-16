@@ -1,5 +1,5 @@
 # Project
-tissue-lite: Python port of the Tissue vertex simulator (e74e457), restricted to the flower-experiments models. The package `tissue_lite` lives in `source/tissue_lite/` (`arrays`, `topology`, `tissue`, `triangles`, `material`, `forces`, `stress`, `feedback`, `growth`, `diagnostics`, `model`, `solvers/`, `legacy/`, `output`, `cli`, `rand`). `reference/` builds Tissue and regenerates the regression data in `tests/data/`. Quirks are kept; suspected bugs go in `KNOWN_ISSUES.md`. Built with `uv`, `ruff`, and **ty**. Overview in `README.md`.
+tissue-lite: Python port of the Tissue vertex simulator (e74e457), restricted to the meristem mechanics models. The package `tissue_lite` lives in `source/tissue_lite/` (`arrays`, `topology`, `tissue`, `triangles`, `material`, `forces`, `stress`, `feedback`, `growth`, `diagnostics`, `model`, `solvers/`, `legacy/`, `output`, `cli`, `rand`). `reference/` builds Tissue and regenerates the regression data in `tests/data/`. Quirks are kept; suspected bugs go in `KNOWN_ISSUES.md`. Built with `uv`, `ruff`, and **ty**. Overview in `README.md`.
 
 # Workflow
 - **Deps**: `uv` (`uv.lock` committed). Never hand-edit `uv.lock`; use `uv add` (`--dev` for tools). Import packages that cannot be installed inside the functions that use them, and list them in `[tool.ty.analysis] allowed-unresolved-imports`.
@@ -29,7 +29,7 @@ Path-scoped rules in `.claude/rules/` load automatically when matching files are
 | Numerics, Numba kernels | `numerics.md` |
 
 # Non-negotiables (always applicable)
-- Logging → stdlib `logging` with a module-level logger (`logger = logging.getLogger(__name__)`). No `print` in library code.
+- Logging → `loguru`: `from loguru import logger`, with `{}` placeholders (`logger.info("plant {}", plant)`). No stdlib `logging`; no `print` in library code.
 - Imports → absolute only. Import from the concrete module path.
 - Types → frozen dataclasses for records and parameters; mutable simulation state (`Tissue`, `ModelState`) is the exception. `Protocol` for structural interfaces; `TypedDict` only for narrow I/O shapes.
 - Arrays → NumPy, typed with the aliases in `tissue_lite.arrays` (`FloatArray`, `IntArray`, `BoolArray`). Per-cell state is a named `CellState` field; Tissue's slot numbers appear only in `tissue_lite.legacy.slots`, never as literal indices.

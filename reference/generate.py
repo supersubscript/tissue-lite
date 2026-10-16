@@ -5,7 +5,7 @@ Usage: uv run python reference/generate.py [--simulator BIN] [--models DIR] [CAS
 Runs Tissue's `simulator` (built by `reference/build_reference.sh`) on each case and
 stores its inputs (model, solver, init), Tissue's `-init_output` state, its VTU
 frames and a `provenance.json` per case. Model files are copied from
-flower-experiments (`--models`), so the tests do not need that repository.
+the `--models` directory, so the tests do not need it.
 """
 
 import hashlib
@@ -42,7 +42,7 @@ class Case:
 
     Attributes:
         name: Directory name under `tests/data/cases/`.
-        model: Model file, relative to flower-experiments.
+        model: Model file, relative to `--models`.
         init: A mesh name in `tests/data/meshes/` or `case:<name>` for another
             case's final state (as `prerunAndSim.sh` chains runs).
         n_vars: Cell variables to pad or truncate the init to.
@@ -273,7 +273,7 @@ def get_compiler_version() -> str:
     "--models",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     required=True,
-    help="flower-experiments checkout holding the model files.",
+    help="Directory holding the model files.",
 )
 @click.argument("names", nargs=-1)
 def main(simulator: Path, models: Path, names: tuple[str, ...]) -> None:
