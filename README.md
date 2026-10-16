@@ -1,6 +1,6 @@
 # tissue-lite
 
-A minimal Python reimplementation of the [Tissue](https://gitlab.com/slcu/teamHJ/tissue) vertex simulator, limited to what the meristem mechanics work uses: the flower-experiments models and the dome-shape results of Paper IV (thesis Fig. 5.4).
+A minimal Python reimplementation of the [Tissue](https://gitlab.com/slcu/teamHJ/tissue) vertex simulator, limited to what the meristem mechanics work uses: the dome-shape results of Paper IV (thesis Fig. 5.4).
 
 It reproduces Tissue e74e457 **bit for bit** on every regression case and on the full 963-cell paraboloid (x86-64, glibc 2.39; the tests allow rtol 1e-9 for other libm versions), and keeps Tissue's quirks; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md). On that mesh a run is about 1.4× faster than Tissue (Numba kernels, one core).
 
@@ -31,7 +31,7 @@ uv sync
 
 ## Use
 
-With Tissue's `simulator` arguments (add `--solver cash-karp` to reproduce its results, e.g. through a wrapper script as flower-experiments' `TISSUE_BIN`):
+With Tissue's `simulator` arguments (add `--solver cash-karp` to reproduce its results):
 
 ```bash
 uv run tissue-lite --solver cash-karp model.model templ.init solver.rk5 -init_output final.init -vtk_output vtk
@@ -95,18 +95,18 @@ The replacement solvers change the feedback semantics (KNOWN_ISSUES N1–N6); th
 | `auxin_softening`, `auxin_softening_hill` | MF=10 as used (K = n = 0) and with K = n = 2 |
 | `patch100` (`slow`) | 100-cell end-to-end run |
 
-Each case stores Tissue's inputs, its `-init_output` state, its VTU frames and a `provenance.json` (commit, compiler, flags, command, SHA-256s); meshes are cut from flower-experiments' `templ.init` (`tests/data/meshes/provenance.json`). States are compared with rtol 1e-9, VTU files token by token within `%g` rounding.
+Each case stores Tissue's inputs, its `-init_output` state, its VTU frames and a `provenance.json` (commit, compiler, flags, command, SHA-256s); meshes are cut from a `templ.init` (`tests/data/meshes/provenance.json`). States are compared with rtol 1e-9, VTU files token by token within `%g` rounding.
 
 ```bash
 uv run pytest            # fast suite
 uv run pytest -m ""      # including slow cases
 ```
 
-To regenerate the reference data (needs g++, make, the Boost headers and a flower-experiments checkout for the model files):
+To regenerate the reference data (needs g++, make, the Boost headers and a directory holding the model files):
 
 ```bash
 reference/build_reference.sh
-uv run python reference/generate.py --models ../flower-experiments
+uv run python reference/generate.py --models <model-dir>
 ```
 
 ## Development
