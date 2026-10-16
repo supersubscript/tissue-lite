@@ -165,7 +165,7 @@ def prerun_and_simulate(
     prerun_solver: Stepper = QuasiStatic(),
     writer: VtuWriter | None = None,
 ) -> tuple[SimulationResult, SimulationResult]:
-    """Reproduces flower-experiments' `prerunAndSim.sh`: prerun, then main run.
+    """Reproduces `prerunAndSim.sh`: prerun, then main run.
 
     The main run starts from the prerun's final state as Tissue re-reads it from
     `-init_output`: cell variables and positions kept, centre triangulation rebuilt,

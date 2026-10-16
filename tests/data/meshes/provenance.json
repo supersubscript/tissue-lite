@@ -1,5 +1,5 @@
 {
-  "source": "flower-experiments/results/zfix_rerun/mod_120_0_04/templ.init",
+  "source": "results/zfix_rerun/mod_120_0_04/templ.init",
   "source_sha256": "ba1eca8dfb981f80512cc596383f907d7e0a0a2ff83b84d231fd7611497a07cd",
   "command": "uv run python reference/cut_patch.py templ.init N_CELLS patchN.init",
   "files": {
