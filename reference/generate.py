@@ -10,10 +10,10 @@ the `--models` directory, so the tests do not need it.
 
 import hashlib
 import json
-import logging
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,11 +22,10 @@ from pathlib import Path
 import click
 import numpy as np
 from cut_patch import RAW_LAYOUT, resize_cell_variables
+from loguru import logger
 
 from tissue_lite.legacy.init_file import read_init, write_init
 from tissue_lite.tissue import Tissue
-
-logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_DIR = ROOT / "tests" / "data" / "cases"
@@ -253,7 +252,7 @@ def run_case(case: Case, simulator: Path, models: Path) -> None:
         "generated": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     (out / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
-    logger.info("Wrote %s", out)
+    logger.info("Wrote {}", out)
 
 
 def get_compiler_version() -> str:
@@ -278,7 +277,8 @@ def get_compiler_version() -> str:
 @click.argument("names", nargs=-1)
 def main(simulator: Path, models: Path, names: tuple[str, ...]) -> None:
     """Regenerates the named cases (default: all)."""
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger.remove()
+    logger.add(sys.stderr, level="INFO", format="{message}")
     known = {c.name for c in CASES}
     unknown = set(names) - known
     if unknown:

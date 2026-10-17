@@ -5,16 +5,14 @@ Files, array names, point layout and number formatting (`%g`) follow Tissue's
 `flower.output` load them unchanged. Cell variables are numbered by a `SlotLayout`.
 """
 
-import logging
 from pathlib import Path
 
 import numpy as np
+from loguru import logger
 
 from tissue_lite.arrays import FloatArray
 from tissue_lite.legacy.slots import SlotLayout
 from tissue_lite.tissue import Tissue, compute_cell_centroids
-
-logger = logging.getLogger(__name__)
 
 _CELL_SHRINK = 0.1  # Tissue's WALL_RELATIVE_THICKNESS
 _POLYGON = 7
@@ -188,4 +186,4 @@ class VtuWriter:
             format_cells(tissue, self.layout)
         )
         (self.directory / f"VTK_walls{index:06d}.vtu").write_text(format_walls(tissue))
-        logger.debug("Wrote frame %d to %s", index, self.directory)
+        logger.debug("Wrote frame {} to {}", index, self.directory)

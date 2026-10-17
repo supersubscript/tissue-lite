@@ -4,9 +4,10 @@ Anything outside the retained subset, or using cell-variable slots other than th
 ones in `legacy.slots`, is rejected rather than silently reinterpreted.
 """
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
+
+from loguru import logger
 
 from tissue_lite.feedback import (
     COUPLING_CODES,
@@ -24,8 +25,6 @@ from tissue_lite.material import (
     TRBSMembrane,
 )
 from tissue_lite.model import MeristemModel
-
-logger = logging.getLogger(__name__)
 
 _CANONICAL_ORDER = (
     "FiberModel",
@@ -231,8 +230,8 @@ def _parse_membrane(r: Reaction) -> tuple[TRBSMembrane, SlotLayout, int]:
         softening = ConcentrationSoftening(k_hill=p[9], n_hill=p[10])
         if (p[11], p[12]) != (p[9], p[10]):
             logger.warning(
-                "MF=10 uses K = p9 = %g and n = p10 = %g as Tissue does; p11 = %g and "
-                "p12 = %g are ignored (KNOWN_ISSUES C1)",
+                "MF=10 uses K = p9 = {:g} and n = p10 = {:g} as Tissue does; "
+                "p11 = {:g} and p12 = {:g} are ignored (KNOWN_ISSUES C1)",
                 p[9],
                 p[10],
                 p[11],
@@ -283,7 +282,7 @@ def _parse_fibres(r: Reaction, membrane: TRBSMembrane) -> FibreStiffness:
     same = (p[5], p[6]) == (membrane.young_matrix, membrane.young_fibre)
     if not same:
         logger.warning(
-            "FiberModel moduli (%g, %g) differ from the TRBS ones", p[5], p[6]
+            "FiberModel moduli ({:g}, {:g}) differ from the TRBS ones", p[5], p[6]
         )
     if r.indices[0] != [slots.STRESS_ANISOTROPY] or r.indices[2] != [slots.VELOCITY]:
         raise ValueError("FiberModel must read slots 18 and 22")
@@ -330,7 +329,7 @@ def _parse_growth(r: Reaction, com: int) -> StrainGrowth:
         raise ValueError("StrainTRBS growth needs four parameters with p3=1")
     if r.indices != [[0], [com], [slots.VELOCITY]]:
         raise ValueError("StrainTRBS indices must be [0], [centre], [22]")
-    logger.debug("StrainTRBS velocity threshold %g is unused, as in Tissue", p[2])
+    logger.debug("StrainTRBS velocity threshold {:g} is unused, as in Tissue", p[2])
     return StrainGrowth(rate=p[0], threshold=p[1])
 
 

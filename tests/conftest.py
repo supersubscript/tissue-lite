@@ -1,12 +1,13 @@
 """Shared paths and helpers for the regression cases in `tests/data/cases/`."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import numpy as np
 import pytest
 from _pytest.mark import ParameterSet  # public pytest.param return type
+from loguru import logger
 
 from tissue_lite.legacy.init_file import read_init
 from tissue_lite.legacy.model_file import LegacyModel, read_model_file
@@ -20,6 +21,20 @@ from tissue_lite.tissue import Tissue
 DATA = Path(__file__).parent / "data"
 CASES_DIR = DATA / "cases"
 MESHES_DIR = DATA / "meshes"
+
+
+@pytest.fixture
+def caplog(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
+    """Routes loguru records into pytest's `caplog`."""
+    handler_id = logger.add(
+        caplog.handler,
+        format="{message}",
+        level=0,
+        filter=lambda record: record["level"].no >= caplog.handler.level,
+    )
+    yield caplog
+    logger.remove(handler_id)
+
 
 # Tissue and tissue-lite agree bit for bit on the reference machine; the tolerances
 # allow for libm differences (pow, acos, sqrt rounding) on other platforms.
