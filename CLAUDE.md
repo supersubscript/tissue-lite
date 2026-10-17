@@ -2,7 +2,8 @@
 
 Shared coding rules live in `.claude/rules/` and load automatically: `styleguide.md` and
 `collaboration-preferences.md` always; `python_style.md`, `python_naming_conventions.md` and
-`numerics.md` when matching files are read. Edit those rather than this file.
+`numerics.md` when matching files are read. These are symlinks to the workspace copies; rules for
+this repo alone go in `.claude/rules/repo.md`, which always loads. Edit those rather than this file.
 
 Additionally:
 - Do not author commits or issues as Claude.
