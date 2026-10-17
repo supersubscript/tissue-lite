@@ -7,11 +7,12 @@ RK5Adaptive file. `--solver cash-karp` reproduces Tissue's results (the
 time span and frame count.
 """
 
-import logging
+import sys
 from pathlib import Path
 
 import click
 import numba
+from loguru import logger
 
 from tissue_lite.legacy.init_file import read_init, write_init
 from tissue_lite.legacy.model_file import read_model_file
@@ -23,8 +24,6 @@ from tissue_lite.solvers.implicit import Implicit
 from tissue_lite.solvers.quasi_static import QuasiStatic
 from tissue_lite.solvers.simulate import simulate
 from tissue_lite.solvers.stepper import Stepper
-
-logger = logging.getLogger(__name__)
 
 _FILE = click.Path(exists=True, dir_okay=False, path_type=Path)
 
@@ -99,9 +98,8 @@ def main(
     verbose: bool,
 ) -> None:
     """Simulates MODEL_FILE from INIT_FILE with the settings in SOLVER_FILE."""
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO, format="%(message)s"
-    )
+    logger.remove()
+    logger.add(sys.stderr, level="DEBUG" if verbose else "INFO", format="{message}")
     numba.set_num_threads(threads)
     if model_file.suffix == ".toml":
         model = MeristemModel.from_toml(model_file)
@@ -130,4 +128,4 @@ def main(
     )
     if init_output is not None:
         write_init(result.final, init_output, layout)
-        logger.info("Wrote %s", init_output)
+        logger.info("Wrote {}", init_output)

@@ -5,11 +5,11 @@ it prints t_end twice, just before the last step and after it, and the VTU tests
 pin that (KNOWN_ISSUES S6). Steppers without `fidelity` print it once.
 """
 
-import logging
 import math
 from dataclasses import dataclass
 
 import numpy as np
+from loguru import logger
 
 from tissue_lite.arrays import FloatArray
 from tissue_lite.model import MeristemModel, ModelState
@@ -17,8 +17,6 @@ from tissue_lite.output import VtuWriter
 from tissue_lite.solvers.quasi_static import QuasiStatic
 from tissue_lite.solvers.stepper import Stepper
 from tissue_lite.tissue import Tissue
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -148,7 +146,10 @@ def integrate(
                 state.compute_forces()
                 emit()
             logger.info(
-                "Simulation done at t = %g: %d ok, %d bad steps", t, accepted, rejected
+                "Simulation done at t = {:g}: {} ok, {} bad steps",
+                t,
+                accepted,
+                rejected,
             )
             return SimulationResult(frames, accepted, rejected, tissue.copy())
 

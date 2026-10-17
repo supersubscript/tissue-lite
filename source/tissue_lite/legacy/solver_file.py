@@ -1,12 +1,11 @@
 """Reader for Tissue's RK5Adaptive solver files (`.rk5`)."""
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from tissue_lite.solvers.cash_karp import CashKarp
+from loguru import logger
 
-logger = logging.getLogger(__name__)
+from tissue_lite.solvers.cash_karp import CashKarp
 
 _VTU_PRINT_FLAG = 2
 
@@ -39,7 +38,7 @@ def read_solver_file(path: Path) -> SolverFile:
         raise ValueError("Only RK5Adaptive solver files are supported")
     t_start, t_end, flag, n_print, h1, eps = tokens[1:7]
     if int(flag) != _VTU_PRINT_FLAG:
-        logger.warning("Print flag %s is not supported; output is VTU (flag 2)", flag)
+        logger.warning("Print flag {} is not supported; output is VTU (flag 2)", flag)
     return SolverFile(
         solver=CashKarp(max_step=float(h1), tolerance=float(eps)),
         t_start=float(t_start),
