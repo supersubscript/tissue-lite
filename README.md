@@ -60,6 +60,8 @@ result = simulate(model, read_init(Path("templ.init")), t_end=20.0, n_frames=10)
 cells = result.final.cells
 ```
 
+From Python, numba runs the force kernel on every core by default; call `numba.set_num_threads(1)` (the CLI's `--threads` default) unless the mesh is large and the cores are idle. With more threads than free cores, a force evaluation on `patch100` took 8–13 ms instead of 0.1 ms, and a quasi-static run 14× longer.
+
 Models can be stored as TOML (`model.to_toml`, `MeristemModel.from_toml`) or read from legacy files (`legacy.model_file.read_model_file`). Per-cell state is named (`tissue.CellState`); Tissue's slot numbering lives only in `legacy.slots.SlotLayout`, used by the `.init` reader and writer and by `output.VtuWriter` (pass one as `writer=` to `simulate` for VTU frames), so files and readers such as `flower.output` work unchanged.
 
 ## Solvers

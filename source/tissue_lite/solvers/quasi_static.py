@@ -1,24 +1,37 @@
 """Quasi-static solver: mechanical equilibrium after each feedback update.
 
-Each step applies the model's per-step updates with the step length (fibres,
-microtubules, growth, pressure ramp), then moves the free positions to where the
-forces vanish. A boundary that leaves rigid motions free (`Boundary.fixed_axes`
-shorter than all three axes) lets the pressure on a non-planar edge drive a rigid
-drift that no position removes; equilibrium is then up to that drift, which is
-discarded (KNOWN_ISSUES N2).
+Each step does two things:
 
-The equilibrium comes from pseudo-transient continuation (Kelley & Keyes, SIAM J.
-Numer. Anal. 35, 1998): implicit Euler steps of pseudo-time τ on the overdamped
-dynamics, which follow the physical path through snap-through inflations at small
-τ and become Newton steps as τ grows. Each pseudo-step takes two simplified Newton
-corrections with the Jacobian J of its start, (I/τ - J) δ = residual, and is
-accepted when the second is smaller than the first (Deuflhard's natural
-monotonicity test, Newton Methods for Nonlinear Problems, 2004, §3.3); τ shrinks
-on rejection and grows on acceptance. The free rigid modes border the system so
-that no step moves the tissue rigidly. J is a coloured finite difference
-(`solvers.sparsity`).
+1. Feedback: apply the model's per-step updates (fibres, microtubules, growth,
+   pressure ramp) for one step length.
+2. Mechanics: move the free node positions until the forces on them vanish.
+
+How the equilibrium is found (pseudo-transient continuation; Kelley & Keyes,
+SIAM J. Numer. Anal. 35, 1998):
+
+- The tissue is overdamped, d(positions)/dt = forces. Instead of following this
+  in real time, the solver takes implicit Euler steps of an artificial
+  "pseudo-time" step τ. Each step solves (I/τ - J) Δx = forces, where J is the
+  Jacobian of the forces with respect to the positions.
+- Small τ makes a step a short, safe move along the physical path, which matters
+  in snap-through inflations. Large τ makes I/τ negligible, and the step becomes a
+  plain Newton step, which converges fast near the equilibrium.
+- τ adapts to how well the forces behave. Each pseudo-step makes a first
+  correction Δx and then a second one with the same matrix, which corrects what
+  the first missed. If the second is less than half the first, the step is
+  accepted and τ grows. Otherwise it is rejected and τ shrinks (Deuflhard's
+  natural monotonicity test, Newton Methods for Nonlinear Problems, 2004, §3.3).
+- J comes from finite differences, with columns grouped by colour so that one
+  force evaluation fills many columns (`solvers.sparsity`).
+
+Rigid drift: a boundary that fixes fewer than all three axes
+(`Boundary.fixed_axes`) leaves some rigid motions free, and the pressure on a
+non-planar edge pushes the tissue along them. No position balances that push. The
+solver constrains every Δx to be free of rigid motion, reports the leftover push
+as `drift`, and ignores it in the convergence test (KNOWN_ISSUES N2).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,10 +48,13 @@ from tissue_lite.solvers.sparsity import (
 )
 from tissue_lite.solvers.stepper import StepResult
 
-_THETA_MAX = 0.5  # contraction a pseudo-step must show to be accepted
-_THETA_FAST = 0.25  # below this τ doubles, otherwise it grows by 1.5
-_TAU_SHRINK = 4.0  # on a rejected step
+_MAX_CONTRACTION = 0.5  # largest |second correction| / |first| that is accepted
+_FAST_CONTRACTION = 0.25  # below this τ doubles, otherwise it grows by 1.5
+_TAU_SHRINK = 4.0  # τ is divided by this on a rejected step
 _TAU_MAX = 1e12
+
+# Solves (I/τ - J) Δx = rhs without rigid motion; returns (Δx, drift).
+type RigidFreeSolver = Callable[[FloatArray], tuple[FloatArray, FloatArray]]
 
 
 @dataclass(frozen=True)
@@ -47,8 +63,8 @@ class QuasiStatic:
 
     `force_tolerance` bounds the largest free force component (a velocity in
     Tissue's units) at equilibrium, after removing the rigid drift the boundary
-    leaves free. `max_iterations` bounds the pseudo-transient Newton iterations per
-    step; the pseudo-time starts at `step`.
+    leaves free. `max_iterations` bounds the accepted pseudo-steps per step; the
+    pseudo-time step τ starts at `step`.
 
     Raises:
         ValueError: If a setting is not positive.
@@ -76,10 +92,12 @@ class QuasiStatic:
 
 
 class QuasiStaticRun:
-    """One quasi-static run; counts Newton iterations and force evaluations.
+    """One quasi-static run; counts accepted pseudo-steps and force evaluations.
 
-    `tau` is the pseudo-time step, carried over between steps: it ends large after
-    a converged solve, so a step from a nearby equilibrium starts as Newton.
+    `free` masks the flattened position components that may move: all cell
+    centres and the vertex components the boundary does not fix. `tau` is the
+    pseudo-time step, carried over between steps: it ends large after a converged
+    solve, so the next step, starting near an equilibrium, begins as Newton.
     """
 
     def __init__(self, config: QuasiStatic, state: ModelState) -> None:
@@ -111,60 +129,95 @@ class QuasiStaticRun:
         return StepResult(t=t + h, accepted=True)
 
     def _solve_equilibrium(self) -> None:
-        """Pseudo-transient Newton on the free positions until the drift-free
-        forces are within `force_tolerance`."""
+        """Takes pseudo-steps until the free forces, less the rigid drift, are
+        within `force_tolerance`, then writes the free positions back."""
         config = self.config
         positions = self.state.positions.ravel()
-        y = positions[self.free]
-        f = self._residual(y)
-        identity = sp.identity(len(y), format="csc")
+        free_positions = positions[self.free]
+        forces = self._compute_forces(free_positions)
         for _ in range(config.max_iterations):
-            modes = self._rigid_modes(y)
-            if np.abs(_remove_drift(f, modes)).max() <= config.force_tolerance:
-                positions[self.free] = y
+            rigid_modes = self._compute_rigid_modes(free_positions)
+            balanced_forces = _remove_rigid_part(forces, rigid_modes)
+            if np.abs(balanced_forces).max() <= config.force_tolerance:
+                positions[self.free] = free_positions
                 return
             jacobian = compute_jacobian(
-                self._residual, y, f, self.pattern, self.colours
+                self._compute_forces, free_positions, forces, self.pattern, self.colours
             )
-            while True:
-                system = identity / self.tau - jacobian
-                first, drift = _solve_bordered(system, modes, f)
-                f_first = self._residual(y + first)
-                euler_residual = first / self.tau - f_first + modes @ drift
-                second, _ = _solve_bordered(system, modes, -euler_residual)
-                theta = float(np.linalg.norm(second) / np.linalg.norm(first))
-                if np.isfinite(theta) and theta < _THETA_MAX:
-                    break
-                self.tau = min(self.tau / _TAU_SHRINK, config.step)
-                if self.tau < config.time_slack:
-                    raise RuntimeError("Pseudo-time step underflow")
-            self.tau = min(self.tau * (2.0 if theta < _THETA_FAST else 1.5), _TAU_MAX)
-            y = y + first + second
-            f = self._residual(y)
+            first, second = self._take_pseudo_step(
+                free_positions, forces, jacobian, rigid_modes
+            )
+            free_positions = free_positions + first + second
+            forces = self._compute_forces(free_positions)
             self.iterations += 1
         raise RuntimeError(f"No equilibrium within {config.max_iterations} iterations")
 
-    def _residual(self, y: FloatArray) -> FloatArray:
-        """The free forces at the free positions y; a pure function, counted."""
-        self._trial.ravel()[self.free] = y
+    def _take_pseudo_step(
+        self,
+        free_positions: FloatArray,
+        forces: FloatArray,
+        jacobian: sp.csc_array,
+        rigid_modes: FloatArray,
+    ) -> tuple[FloatArray, FloatArray]:
+        """Returns the two corrections of one accepted implicit Euler step of size τ.
+
+        The implicit Euler equation for a displacement Δx is
+        Δx/τ = forces(x + Δx), linearised as (I/τ - J) Δx = forces(x). The first
+        correction solves the linearised equation; the second, with the same
+        matrix, removes the error left in the full equation. Their size ratio
+        measures how linear the forces are over the step. The step is accepted
+        when the ratio is below `_MAX_CONTRACTION`; otherwise τ shrinks and the
+        step is retried. τ then grows for the next step.
+
+        Raises:
+            RuntimeError: If τ shrinks below `time_slack`.
+        """
+        identity = sp.identity(len(free_positions), format="csc")
+        while True:
+            solve = _factorise_rigid_free_system(
+                identity / self.tau - jacobian, rigid_modes
+            )
+            first, drift = solve(forces)
+            forces_after_first = self._compute_forces(free_positions + first)
+            # Residual of the implicit Euler equation after the first correction.
+            euler_residual = first / self.tau - forces_after_first + rigid_modes @ drift
+            second, _ = solve(-euler_residual)
+            contraction = float(np.linalg.norm(second) / np.linalg.norm(first))
+            if np.isfinite(contraction) and contraction < _MAX_CONTRACTION:
+                break
+            self.tau = min(self.tau / _TAU_SHRINK, self.config.step)
+            if self.tau < self.config.time_slack:
+                raise RuntimeError("Pseudo-time step underflow")
+        growth = 2.0 if contraction < _FAST_CONTRACTION else 1.5
+        self.tau = min(self.tau * growth, _TAU_MAX)
+        return first, second
+
+    def _compute_forces(self, free_positions: FloatArray) -> FloatArray:
+        """Returns the free force components at the given free positions.
+
+        A pure function of its argument (the real state is not touched); each
+        call is counted in `evaluations`.
+        """
+        self._trial.ravel()[self.free] = free_positions
         self.evaluations += 1
         return self.state.compute_trial_forces(self._trial).ravel()[self.free]
 
-    def _rigid_modes(self, y: FloatArray) -> FloatArray:
-        """Orthonormal basis (n_free, m) of the rigid motions the boundary leaves free.
+    def _compute_rigid_modes(self, free_positions: FloatArray) -> FloatArray:
+        """Returns an orthonormal basis (n_free, m) of the rigid motions the
+        boundary leaves free.
 
-        Translation along an axis the boundary does not fix, and rotation about an
-        axis (through the centroid) when it fixes no other axis; m is 0 for a fully
-        fixed boundary (KNOWN_ISSUES N2).
+        Translation along each axis the boundary does not fix, and rotation about
+        an axis (through the centroid) when the boundary fixes neither of the
+        other two. m is 0 for a fully fixed boundary (KNOWN_ISSUES N2).
         """
-        self._trial.ravel()[self.free] = y
+        self._trial.ravel()[self.free] = free_positions
         positions = self._trial
         fixed_axes = self.state.fixed.any(axis=0)
         modes = []
         for axis in np.flatnonzero(~fixed_axes):
-            mode = np.zeros_like(positions)
-            mode[:, axis] = 1.0
-            modes.append(mode)
+            translation = np.zeros_like(positions)
+            translation[:, axis] = 1.0
+            modes.append(translation)
         centred = positions - positions.mean(axis=0)
         # The boundary alone decides: the fibres stay fixed in space, so with fibre
         # stiffness a torque that a relative rotation could balance is discarded too.
@@ -172,28 +225,51 @@ class QuasiStaticRun:
             if not fixed_axes[np.arange(3) != axis].any():
                 modes.append(np.cross(np.eye(3)[axis], centred))
         if not modes:
-            return np.zeros((len(y), 0))
-        basis, _ = np.linalg.qr(np.stack([m.ravel()[self.free] for m in modes], axis=1))
+            return np.zeros((len(free_positions), 0))
+        free_modes = np.stack([mode.ravel()[self.free] for mode in modes], axis=1)
+        basis, _ = np.linalg.qr(free_modes)
         return basis
 
 
-def _remove_drift(f: FloatArray, modes: FloatArray) -> FloatArray:
-    """Returns f without its component along the orthonormal rigid modes."""
-    return f - modes @ (modes.T @ f)
+def _remove_rigid_part(forces: FloatArray, rigid_modes: FloatArray) -> FloatArray:
+    """Returns the forces without their projection on the orthonormal rigid modes."""
+    return forces - rigid_modes @ (rigid_modes.T @ forces)
 
 
-def _solve_bordered(
-    system: sp.csc_array, modes: FloatArray, rhs: FloatArray
-) -> tuple[FloatArray, FloatArray]:
-    """Solves `system` δ - modes ν = rhs with modesᵀ δ = 0; returns (δ, ν).
+def _factorise_rigid_free_system(
+    system: sp.csc_array, rigid_modes: FloatArray
+) -> RigidFreeSolver:
+    """Factorises `system` once and returns a solver for any right-hand side.
 
-    δ moves nothing rigidly and ν is the rigid drift left in the forces.
+    Without rigid modes the solver returns system⁻¹ rhs and an empty drift.
+
+    With m rigid modes R (n × m), the displacement Δx must not move the tissue
+    rigidly (Rᵀ Δx = 0), so in general no Δx satisfies system Δx = rhs exactly:
+    the part of rhs along R cannot be balanced. The solver therefore also
+    returns drift ν (length m), the rigid push left over, from the saddle-point
+    system
+
+        [ system  -R ] [Δx]   [rhs]
+        [ Rᵀ       0 ] [ν ] = [ 0 ].
+
+    Both pseudo-step corrections solve with the same matrix, so it is factorised
+    only once.
     """
-    n, m = modes.shape
+    n, m = rigid_modes.shape
     if m == 0:
-        return spla.splu(sp.csc_array(system)).solve(rhs), np.zeros(0)
-    bordered = sp.bmat(
-        [[system, sp.csc_array(-modes)], [sp.csc_array(modes.T), None]], format="csc"
+        lu = spla.splu(sp.csc_array(system))
+        return lambda rhs: (lu.solve(rhs), np.zeros(0))
+    saddle_point = sp.bmat(
+        [
+            [system, sp.csc_array(-rigid_modes)],
+            [sp.csc_array(rigid_modes.T), None],
+        ],
+        format="csc",
     )
-    solution = spla.splu(bordered).solve(np.concatenate([rhs, np.zeros(m)]))
-    return solution[:n], solution[n:]
+    lu = spla.splu(saddle_point)
+
+    def solve(rhs: FloatArray) -> tuple[FloatArray, FloatArray]:
+        solution = lu.solve(np.concatenate([rhs, np.zeros(m)]))
+        return solution[:n], solution[n:]
+
+    return solve
