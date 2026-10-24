@@ -19,6 +19,7 @@ that no step moves the tissue rigidly. J is a coloured finite difference
 (`solvers.sparsity`).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -127,11 +128,11 @@ class QuasiStaticRun:
                 self._residual, y, f, self.pattern, self.colours
             )
             while True:
-                system = identity / self.tau - jacobian
-                first, drift = _solve_bordered(system, modes, f)
+                solve = _factor_bordered(identity / self.tau - jacobian, modes)
+                first, drift = solve(f)
                 f_first = self._residual(y + first)
                 euler_residual = first / self.tau - f_first + modes @ drift
-                second, _ = _solve_bordered(system, modes, -euler_residual)
+                second, _ = solve(-euler_residual)
                 theta = float(np.linalg.norm(second) / np.linalg.norm(first))
                 if np.isfinite(theta) and theta < _THETA_MAX:
                     break
@@ -182,18 +183,24 @@ def _remove_drift(f: FloatArray, modes: FloatArray) -> FloatArray:
     return f - modes @ (modes.T @ f)
 
 
-def _solve_bordered(
-    system: sp.csc_array, modes: FloatArray, rhs: FloatArray
-) -> tuple[FloatArray, FloatArray]:
-    """Solves `system` δ - modes ν = rhs with modesᵀ δ = 0; returns (δ, ν).
+def _factor_bordered(
+    system: sp.csc_array, modes: FloatArray
+) -> Callable[[FloatArray], tuple[FloatArray, FloatArray]]:
+    """Factorises `system` δ - modes ν = rhs with modesᵀ δ = 0; returns rhs -> (δ, ν).
 
     δ moves nothing rigidly and ν is the rigid drift left in the forces.
     """
     n, m = modes.shape
     if m == 0:
-        return spla.splu(sp.csc_array(system)).solve(rhs), np.zeros(0)
+        lu = spla.splu(sp.csc_array(system))
+        return lambda rhs: (lu.solve(rhs), np.zeros(0))
     bordered = sp.bmat(
         [[system, sp.csc_array(-modes)], [sp.csc_array(modes.T), None]], format="csc"
     )
-    solution = spla.splu(bordered).solve(np.concatenate([rhs, np.zeros(m)]))
-    return solution[:n], solution[n:]
+    lu = spla.splu(bordered)
+
+    def solve(rhs: FloatArray) -> tuple[FloatArray, FloatArray]:
+        solution = lu.solve(np.concatenate([rhs, np.zeros(m)]))
+        return solution[:n], solution[n:]
+
+    return solve
